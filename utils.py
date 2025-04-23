@@ -2,25 +2,26 @@ import os
 from typing import List, Tuple
 import cv2
 import random
+import re
 
-def load_yolo_dataset(images_dir: str, labels_dir: str, exts: List[str] = [".jpg", ".png"]) -> List[Tuple[any, List[List[float]]]]:
+def split_and_sort_by_camera(images_dir: str, labels_dir: str, exts: List[str] = [".jpg", ".png"]):
     """
-    Carica immagini e labels da un dataset in formato YOLOv1/v2 usando OpenCV.
-    Args:
-        images_dir (str): Cartella delle immagini.
-        labels_dir (str): Cartella delle labels.
-        exts (List[str]): Estensioni delle immagini da considerare.
-    Returns:
-        List[Tuple[any, List[List[float]]]]: Lista di tuple (immagine, labels).
+    Divide il dataset in base alla telecamera e ordina i frame per numero di frame.
+    Ritorna un dizionario: {camera_number: [(img, labels, frame_number), ...]}
     """
-    dataset = []
+    pattern = re.compile(r"out(\d+)_frame_(\d+)")
+    camera_dict = {}
+
     for fname in os.listdir(images_dir):
         if any(fname.lower().endswith(ext) for ext in exts):
+            match = pattern.search(fname)
+            if not match:
+                continue
+            cam_num = int(match.group(1))
+            frame_num = int(match.group(2))
             img_path = os.path.join(images_dir, fname)
             label_path = os.path.join(labels_dir, os.path.splitext(fname)[0] + ".txt")
-            # Carica immagine con OpenCV (BGR)
             img = cv2.imread(img_path)
-            # Carica labels
             labels = []
             if os.path.exists(label_path):
                 with open(label_path, "r") as f:
@@ -28,8 +29,15 @@ def load_yolo_dataset(images_dir: str, labels_dir: str, exts: List[str] = [".jpg
                         parts = line.strip().split()
                         if len(parts) >= 5:
                             labels.append([float(x) for x in parts])
-            dataset.append((img, labels))
-    return dataset
+            if cam_num not in camera_dict:
+                camera_dict[cam_num] = []
+            camera_dict[cam_num].append((img, labels, frame_num))
+
+    # Ordina per frame_number
+    for cam_num in camera_dict:
+        camera_dict[cam_num].sort(key=lambda x: x[2])
+
+    return camera_dict
 
 def show_image_with_labels(image, labels, class_names: List[str], class_colors: List[Tuple[int, int, int]], max_size: int = 800):
     """
