@@ -24,4 +24,8 @@ class_colors = [
     (255, 255, 0)      # cyan
 ]
 
-show_image_with_labels(dataset_camera13[0][0], dataset_camera13[0][1], class_names, class_colors, max_size=800)
+#show_image_with_labels(dataset_camera13[0][0], dataset_camera13[0][1], class_names, class_colors, max_size=800)
+out13_path="dataset/video/out13.mp4"
+frames_out13=extract_frames_from_video(out13_path)
+print(len(frames_out13))
+show_frame(frames_out13[0],"Primo frame camera 13")

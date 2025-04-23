@@ -68,3 +68,46 @@ def show_image_with_labels(image, labels, class_names: List[str], class_colors: 
     cv2.imshow("Image with Labels", resized_image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+def extract_frames_from_video(video_path):
+    """
+    Legge un video .mp4 e restituisce i frame come una lista di immagini.
+    
+    Args:
+        video_path (str): Il percorso del file video.
+    
+    Returns:
+        list: Una lista di frame (immagini) estratti dal video.
+    """
+    frames = []
+    cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        print(f"Errore nell'aprire il video: {video_path}")
+        return frames
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    
+    cap.release()
+    return frames
+
+def show_frame(frame, window_name="Frame", max_size=800):
+    """
+    Mostra un singolo frame ridimensionato se troppo grande.
+    
+    Args:
+        frame (any): Il frame da mostrare (immagine in formato BGR).
+        window_name (str): Nome della finestra di visualizzazione.
+        max_size (int): Dimensione massima per il lato più lungo del frame.
+    """
+    h, w, _ = frame.shape
+    scale = min(max_size / h, max_size / w, 1.0)
+    resized_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+
+    cv2.imshow(window_name, resized_frame)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
