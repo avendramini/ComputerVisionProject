@@ -1,5 +1,5 @@
 from utils import *
-
+from detection.ballDetection import ballDetection
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
 camera_datasets=split_and_sort_by_camera(images_path, labels_path)
@@ -24,8 +24,17 @@ class_colors = [
     (255, 255, 0)      # cyan
 ]
 
-#show_image_with_labels(dataset_camera13[0][0], dataset_camera13[0][1], class_names, class_colors, max_size=800)
-out13_path="dataset/video/out13.mp4"
-frames_out13=extract_frames_from_video(out13_path)
-print(len(frames_out13))
-show_frame(frames_out13[0],"Primo frame camera 13")
+path_videos=['dataset/video/out4.mp4', 'dataset/video/out13.mp4']
+frame_videos={
+    4:extract_frames_from_video(path_videos[0]),
+    13:extract_frames_from_video(path_videos[1])
+}
+
+
+for i in range(0, len(frame_videos[13]), 100):
+    # Mostra la maschera della palla
+    mask = ballDetection(frame_videos[13][i])
+    show_side_by_side(frame_videos[13][i], mask, window_name=f"Frame {i}", max_size=800)
+    cv2.waitKey(0)
+
+

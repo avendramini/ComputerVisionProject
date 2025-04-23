@@ -111,3 +111,31 @@ def show_frame(frame, window_name="Frame", max_size=800):
     cv2.imshow(window_name, resized_frame)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+def show_side_by_side(rgb_frame, binary_mask, window_name="Side by Side", max_size=800):
+    """
+    Mostra due immagini affiancate: un frame RGB e una maschera binaria.
+    
+    Args:
+        rgb_frame (any): Il frame RGB (immagine in formato BGR).
+        binary_mask (any): La maschera binaria (immagine in scala di grigi).
+        window_name (str): Nome della finestra di visualizzazione.
+        max_size (int): Dimensione massima per il lato più lungo delle immagini.
+    """
+    # Convert binary mask to 3 channels for visualization
+    binary_mask_colored = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
+
+    # Resize both images to the same scale
+    h1, w1, _ = rgb_frame.shape
+    h2, w2, _ = binary_mask_colored.shape
+    scale = min(max_size / max(h1, w1), max_size / max(h2, w2), 1.0)
+    resized_rgb = cv2.resize(rgb_frame, (int(w1 * scale), int(h1 * scale)))
+    resized_mask = cv2.resize(binary_mask_colored, (int(w2 * scale), int(h2 * scale)))
+
+    # Concatenate the images side by side
+    side_by_side = cv2.hconcat([resized_rgb, resized_mask])
+
+    # Show the concatenated image
+    cv2.imshow(window_name, side_by_side)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
