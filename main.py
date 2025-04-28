@@ -1,11 +1,8 @@
 from utils import *
-from detection.ballDetection import ballDetection
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
-camera_datasets=split_and_sort_by_camera(images_path, labels_path)
+camera_datasets=split_and_sort_by_camera(images_path, labels_path) #
 
-dataset_camera4= camera_datasets[4]
-dataset_camera13=camera_datasets[13]
 
 class_names= ['Ball', 'Red_0', 'Red_11', 'Red_12', 'Red_16', 'Red_2', 'Refree_F', 'Refree_M', 'White_13', 'White_16', 'White_25', 'White_27', 'White_34']
 class_colors = [
@@ -30,11 +27,22 @@ frame_videos={
     13:extract_frames_from_video(path_videos[1])
 }
 
+#show_side_by_side(camera_datasets[4][0][0],frame_videos[4][2], max_size=800)
+#show_side_by_side(camera_datasets[13][0][0],frame_videos[13][2], max_size=800)
 
-for i in range(0, len(frame_videos[13]), 100):
-    # Mostra la maschera della palla
-    mask = ballDetection(frame_videos[13][i])
-    show_side_by_side(frame_videos[13][i], mask, window_name=f"Frame {i}", max_size=800)
-    cv2.waitKey(0)
+#Il terzo frame è il primo etichettato, poi si fa +5 ogni volta
+#camera_datasets[13][0][0]->frame_videos[13][2]
+#camera_datasets[13][1][0]->frame_videos[13][7]
+#...
+offset=2
+old_labels=camera_datasets[13][0][1]
+old_frame=frame_videos[13][offset]
+for i in range(offset+1,len(frame_videos[13])):
+    #usa old_labels e old_frame per fare tracking
+    new_frame=frame_videos[13][i]
+
+
+
+
 
 

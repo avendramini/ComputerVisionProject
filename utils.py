@@ -1,9 +1,8 @@
 import os
 from typing import List, Tuple
 import cv2
-import random
 import re
-
+import numpy as np
 def split_and_sort_by_camera(images_dir: str, labels_dir: str, exts: List[str] = [".jpg", ".png"]):
     """
     Divide il dataset in base alla telecamera e ordina i frame per numero di frame.
@@ -112,28 +111,34 @@ def show_frame(frame, window_name="Frame", max_size=800):
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-def show_side_by_side(rgb_frame, binary_mask, window_name="Side by Side", max_size=800):
+def show_side_by_side(image1, image2, window_name="Side by Side", max_size=800):
     """
-    Mostra due immagini affiancate: un frame RGB e una maschera binaria.
+    Mostra due immagini affiancate: due immagini qualsiasi (ad esempio un frame RGB e una maschera binaria).
     
     Args:
-        rgb_frame (any): Il frame RGB (immagine in formato BGR).
-        binary_mask (any): La maschera binaria (immagine in scala di grigi).
+        image1 (any): La prima immagine (ad esempio un frame RGB in formato BGR).
+        image2 (any): La seconda immagine (ad esempio una maschera binaria o un'altra immagine).
         window_name (str): Nome della finestra di visualizzazione.
         max_size (int): Dimensione massima per il lato più lungo delle immagini.
     """
-    # Convert binary mask to 3 channels for visualization
-    binary_mask_colored = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
+    # Ensure both images are numpy arrays
+    if not isinstance(image1, np.ndarray):
+        image1 = np.array(image1)
+    if not isinstance(image2, np.ndarray):
+        image2 = np.array(image2)
+    # Convert the second image to 3 channels if it is grayscale
+    if len(image2.shape) == 2:  # Grayscale image
+        image2 = cv2.cvtColor(image2, cv2.COLOR_GRAY2BGR)
 
     # Resize both images to the same scale
-    h1, w1, _ = rgb_frame.shape
-    h2, w2, _ = binary_mask_colored.shape
+    h1, w1, _ = image1.shape
+    h2, w2, _ = image2.shape
     scale = min(max_size / max(h1, w1), max_size / max(h2, w2), 1.0)
-    resized_rgb = cv2.resize(rgb_frame, (int(w1 * scale), int(h1 * scale)))
-    resized_mask = cv2.resize(binary_mask_colored, (int(w2 * scale), int(h2 * scale)))
+    resized_image1 = cv2.resize(image1, (int(w1 * scale), int(h1 * scale)))
+    resized_image2 = cv2.resize(image2, (int(w2 * scale), int(h2 * scale)))
 
     # Concatenate the images side by side
-    side_by_side = cv2.hconcat([resized_rgb, resized_mask])
+    side_by_side = cv2.hconcat([resized_image1, resized_image2])
 
     # Show the concatenated image
     cv2.imshow(window_name, side_by_side)
