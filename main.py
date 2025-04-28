@@ -1,4 +1,5 @@
 from utils import *
+from tracking import *
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
 camera_datasets=split_and_sort_by_camera(images_path, labels_path) #
@@ -35,14 +36,19 @@ frame_videos={
 #camera_datasets[13][1][0]->frame_videos[13][7]
 #...
 offset=2
-old_labels=camera_datasets[13][0][1]
-old_frame=frame_videos[13][offset]
-for i in range(offset+1,len(frame_videos[13])):
-    #usa old_labels e old_frame per fare tracking
-    new_frame=frame_videos[13][i]
+cameras=[13]
+prev_labels={4:[],13:[]}
+for cam in cameras:
 
+    prev_labels[cam].append(camera_datasets[cam][0][1])
+    for i in range(offset+1,len(frame_videos[cam])):
+        #usa old_labels e old_frame per fare tracking
+        prev_labels=find_labels(new_frame=frame_videos[cam][i],old_frame=frame_videos[cam][i-1],prev_label=prev_labels[cam][-1])
 
-
+loss={4:1e9,13:1e9}
+for cam in cameras:
+    for i in range(len(camera_datasets[cam])):
+        loss+=compare_labels(camera_datasets[cam][i][1],prev_labels[cam][offset+i*5])
 
 
 
