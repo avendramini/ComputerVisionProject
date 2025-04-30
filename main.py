@@ -1,5 +1,6 @@
 from utils import *
 from tracking import *
+from ultralytics import YOLO
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
 camera_datasets=split_and_sort_by_camera(images_path, labels_path) #
@@ -35,7 +36,14 @@ frame_videos={
 #camera_datasets[13][0][0]->frame_videos[13][2]
 #camera_datasets[13][1][0]->frame_videos[13][7]
 #...
-offset=2
+
+#print("Extracted Image:", image)
+#print("YOLO Detected Labels:", labels)
+#show_image_with_labels(image,labels)
+
+model = YOLO("yolov8x.pt")  # o yolov8s.pt, yolov8m.pt, ecc.
+
+offset = 2
 cameras=[13]
 prev_labels={4:[],13:[]}
 for cam in cameras:
@@ -43,12 +51,15 @@ for cam in cameras:
     prev_labels[cam].append(camera_datasets[cam][0][1])
     for i in range(offset+1,len(frame_videos[cam])):
         #usa old_labels e old_frame per fare tracking
-        prev_labels=find_labels(new_frame=frame_videos[cam][i],old_frame=frame_videos[cam][i-1],prev_label=prev_labels[cam][-1])
-
-loss={4:1e9,13:1e9}
+        new_labels=find_labels(new_frame=frame_videos[cam][i],old_frame=frame_videos[cam][i-1],prev_labels=prev_labels[cam][-1],model=model)
+        show_image_with_labels(frame_videos[cam][i],new_labels,class_names=class_names,class_colors=class_colors,max_size=800)
+        prev_labels[cam].append(new_labels)
+        if i==5:
+            break
+loss={4:0,13:0}
 for cam in cameras:
     for i in range(len(camera_datasets[cam])):
-        loss+=compare_labels(camera_datasets[cam][i][1],prev_labels[cam][offset+i*5])
-
-
+        loss[cam]+=compare_labels(camera_datasets[cam][i][1],prev_labels[cam][offset+i*5])
+    
+    print(f"Loss for camera {cam}: {loss[cam]}")
 

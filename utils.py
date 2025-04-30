@@ -38,14 +38,14 @@ def split_and_sort_by_camera(images_dir: str, labels_dir: str, exts: List[str] =
 
     return camera_dict
 
-def show_image_with_labels(image, labels, class_names: List[str], class_colors: List[Tuple[int, int, int]], max_size: int = 800):
+def show_image_with_labels(image, labels, class_names: List[str] = None, class_colors: List[Tuple[int, int, int]] = None, max_size: int = 800):
     """
     Mostra un'immagine con i rettangoli delle labels disegnati sopra, ridimensionata se troppo grande.
     Args:
         image (any): Immagine su cui disegnare (BGR).
         labels (List[List[float]]): Lista di labels in formato YOLO [class, x_center, y_center, width, height].
-        class_names (List[str]): Lista dei nomi delle classi.
-        class_colors (List[Tuple[int, int, int]]): Lista dei colori per ogni classe.
+        class_names (List[str], optional): Lista dei nomi delle classi. Default è None.
+        class_colors (List[Tuple[int, int, int]], optional): Lista dei colori per ogni classe. Default è None.
         max_size (int): Dimensione massima per il lato più lungo dell'immagine.
     """
     h, w, _ = image.shape
@@ -53,14 +53,14 @@ def show_image_with_labels(image, labels, class_names: List[str], class_colors: 
     resized_image = cv2.resize(image, (int(w * scale), int(h * scale)))
 
     for label in labels:
-        class_id, x_center, y_center, width, height = label
+        class_id, x_center, y_center, width, height = label[:5]
         x1 = int((x_center - width / 2) * resized_image.shape[1])
         y1 = int((y_center - height / 2) * resized_image.shape[0])
         x2 = int((x_center + width / 2) * resized_image.shape[1])
         y2 = int((y_center + height / 2) * resized_image.shape[0])
-        color = class_colors[int(class_id)] 
+        color = (0, 255, 0) if class_colors is None else class_colors[int(class_id) % len(class_colors)]
         cv2.rectangle(resized_image, (x1, y1), (x2, y2), color, 2)
-        if int(class_id) < len(class_names):
+        if class_names and int(class_id) < len(class_names):
             label_text = class_names[int(class_id)]
             cv2.putText(resized_image, label_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
