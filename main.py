@@ -4,7 +4,10 @@ from ultralytics import YOLO
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
 camera_datasets=split_and_sort_by_camera(images_path, labels_path) #
+tiler = YOLO("yolov8x.pt")
+boxes = tiler.predict(camera_datasets[13][0][0])
 
+show_image_with_labels(camera_datasets[13][0][0], boxes, max_size=1280)
 
 class_names= ['Ball', 'Red_0', 'Red_11', 'Red_12', 'Red_16', 'Red_2', 'Refree_F', 'Refree_M', 'White_13', 'White_16', 'White_25', 'White_27', 'White_34']
 class_colors = [
@@ -23,25 +26,13 @@ class_colors = [
     (255, 255, 0)      # cyan
 ]
 
+
 path_videos=['dataset/video/out4.mp4', 'dataset/video/out13.mp4']
 frame_videos={
     4:extract_frames_from_video(path_videos[0]),
     13:extract_frames_from_video(path_videos[1])
 }
 
-#show_side_by_side(camera_datasets[4][0][0],frame_videos[4][2], max_size=800)
-#show_side_by_side(camera_datasets[13][0][0],frame_videos[13][2], max_size=800)
-
-#Il terzo frame è il primo etichettato, poi si fa +5 ogni volta
-#camera_datasets[13][0][0]->frame_videos[13][2]
-#camera_datasets[13][1][0]->frame_videos[13][7]
-#...
-
-#print("Extracted Image:", image)
-#print("YOLO Detected Labels:", labels)
-#show_image_with_labels(image,labels)
-
-model = YOLO("yolov8x.pt")  # o yolov8s.pt, yolov8m.pt, ecc.
 
 offset = 2
 cameras=[13]
