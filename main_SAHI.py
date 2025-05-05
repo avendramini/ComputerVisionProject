@@ -11,7 +11,7 @@ camera_datasets=split_and_sort_by_camera(images_path, labels_path) #
 
 detection_model = AutoDetectionModel.from_pretrained(
     model_type='ultralytics',
-    model_path='yolov12x.pt',
+    model_path='yolo12x.pt',
     confidence_threshold=0.7,
     device="cuda:0" if torch.cuda.is_available() else "cpu",
 )
