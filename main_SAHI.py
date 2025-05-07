@@ -12,7 +12,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from tracking.assignment_tracker import AssignmentTracker
-from tracking.kanade_tracker import KanadeTracker
 
 images_path="dataset/train/images"
 labels_path="dataset/train/labels"
@@ -62,13 +61,10 @@ frame_videos={
     13:[]#extract_frames_from_video(path_videos[1])
 }
 
-selected_classes=[0,32]
+selected_classes=[0]
 offset = 2
 cameras=[13]
 prev_labels={4:[],13:[]}
-
-# Inizializza il tracker IOU
-tracker = AssignmentTracker()  # oppure KanadeTracker()
 
 # --- Selezione poligono e rettangolo all'inizio ---
 for cam in cameras:
@@ -126,10 +122,34 @@ for cam in cameras:
             y_min = max(0, min(y_min, frame_height))
             x_max = max(0, min(x_max, frame_width))
             y_max = max(0, min(y_max, frame_height))
-            # Filtro: centro della box deve essere sia nel poligono che nel rettangolo
-            if not (is_center_in_polygon([x_min, y_min, x_max, y_max], polygon) and 
-                   is_center_in_rectangle([x_min, y_min, x_max, y_max], rectangle)):
+            
+            # Calcola l'intersezione con il rettangolo
+            rect_x, rect_y, rect_w, rect_h = rectangle
+            rect_x2 = rect_x + rect_w
+            rect_y2 = rect_y + rect_h
+            
+            # Calcola l'area di intersezione
+            inter_x1 = max(x_min, rect_x)
+            inter_y1 = max(y_min, rect_y)
+            inter_x2 = min(x_max, rect_x2)
+            inter_y2 = min(y_max, rect_y2)
+            
+            # Se non c'è intersezione, salta
+            if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
                 continue
+                
+            # Calcola l'area di intersezione
+            inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+            box_area = (x_max - x_min) * (y_max - y_min)
+            
+            # Se l'intersezione è troppo piccola (meno del 10% dell'area della box), salta
+            if inter_area < 0.1 * box_area:
+                continue
+            
+            # Filtro: centro della box deve essere nel poligono
+            if not is_center_in_polygon([x_min, y_min, x_max, y_max], polygon):
+                continue
+                
             # Controllo di validità
             if x_max <= x_min or y_max <= y_min:
                 continue
@@ -147,7 +167,7 @@ for cam in cameras:
         tracks = []
         if detections:
             # detections è già lista di [x1,y1,x2,y2,conf,class_id]
-            tracks = tracker.update(frame=frame, detections=detections)
+            tracks = tracker.update(detections=detections)
 
         print(f"Tracks attivi: {len(tracks)}")
         
@@ -201,7 +221,7 @@ for cam in cameras:
         #plt.axis("off")
         #plt.title(f"Frame {frame_idx}")
         #plt.show()
-        if frame_idx == 100:
+        if frame_idx == 200:
             break
         # Per demo: ferma dopo 5 frame
         frame_idx+=1
