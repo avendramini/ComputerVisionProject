@@ -3,6 +3,8 @@ from typing import List, Tuple
 import cv2
 import re
 import numpy as np
+from matplotlib.path import Path
+import matplotlib.pyplot as plt
 def split_and_sort_by_camera(images_dir: str, labels_dir: str, exts: List[str] = [".jpg", ".png"]):
     """
     Divide il dataset in base alla telecamera e ordina i frame per numero di frame.
@@ -144,3 +146,53 @@ def show_side_by_side(image1, image2, window_name="Side by Side", max_size=800):
     cv2.imshow(window_name, side_by_side)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+def select_polygon_scaled(frame, display_width=1200):
+    h, w = frame.shape[:2]
+    scale = display_width / w
+    frame_small = cv2.resize(frame, (display_width, int(h * scale)))
+    points = []
+    def onclick(event):
+        if event.xdata is not None and event.ydata is not None:
+            points.append((event.xdata, event.ydata))
+            plt.plot(event.xdata, event.ydata, 'ro')
+            plt.draw()
+            if len(points) == 4:
+                plt.close()
+    fig, ax = plt.subplots()
+    ax.imshow(cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB))
+    plt.title('Clicca 4 punti per selezionare la zona')
+    cid = fig.canvas.mpl_connect('button_press_event', onclick)
+    plt.show()
+    # Scala i punti alle dimensioni originali
+    points = [(int(x / scale), int(y / scale)) for x, y in points]
+    return np.array(points)
+
+def is_center_in_polygon(bbox, polygon):
+    x_min, y_min, x_max, y_max = bbox
+    x_c = (x_min + x_max) / 2
+    y_c = (y_min + y_max) / 2
+    path = Path(polygon)
+    return path.contains_point((x_c, y_c))
+
+def is_center_in_rectangle(bbox, rect):
+    x_min, y_min, x_max, y_max = bbox
+    x_c = (x_min + x_max) / 2
+    y_c = (y_min + y_max) / 2
+    rect_x, rect_y, rect_w, rect_h = rect
+    return (rect_x <= x_c <= rect_x + rect_w and 
+            rect_y <= y_c <= rect_y + rect_h)
+
+def select_roi_scaled(frame, display_width=1200):
+    h, w = frame.shape[:2]
+    scale = display_width / w
+    frame_small = cv2.resize(frame, (display_width, int(h * scale)))
+    roi_small = cv2.selectROI("Seleziona area", frame_small, fromCenter=False, showCrosshair=True)
+    cv2.destroyWindow("Seleziona area")
+    # Converti la ROI alle coordinate originali
+    x, y, rw, rh = roi_small
+    x = int(x / scale)
+    y = int(y / scale)
+    rw = int(rw / scale)
+    rh = int(rh / scale)
+    return (x, y, rw, rh)
