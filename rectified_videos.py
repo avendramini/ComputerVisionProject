@@ -1,3 +1,42 @@
+def rectify_labels(label_dir, calib_path, img_w, img_h, output_dir):
+    """
+    Rettifica le label YOLO (x_center, y_center) usando la stessa mappa di undistortion del video.
+    Salva i file rettificati in output_dir.
+    """
+    mtx, dist = load_calibration(calib_path)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    label_files = sorted([f for f in os.listdir(label_dir) if f.endswith('.txt')])
+    for fname in label_files:
+        in_path = os.path.join(label_dir, fname)
+        out_path = os.path.join(output_dir, fname)
+        new_lines = []
+        with open(in_path, 'r') as fin:
+            for line in fin:
+                parts = line.strip().split()
+                if len(parts) < 5:
+                    continue
+                cls = parts[0]
+                x, y, w, h = map(float, parts[1:5])
+                conf = parts[5] if len(parts) > 5 else None
+                # Denormalizza centro bbox
+                px = x * img_w
+                py = y * img_h
+                # Rettifica centro bbox
+                pt = np.array([[[px, py]]], dtype=np.float32)  # shape (1,1,2)
+                pt_rect = cv2.undistortPoints(pt, mtx, dist, P=mtx)
+                rx, ry = pt_rect[0,0,0], pt_rect[0,0,1]
+                # Rinormalizza
+                x_new = rx / img_w
+                y_new = ry / img_h
+                # Mantieni w,h invariati (approssimazione)
+                if conf is not None:
+                    new_line = f"{cls} {x_new:.6f} {y_new:.6f} {w:.6f} {h:.6f} {conf}\n"
+                else:
+                    new_line = f"{cls} {x_new:.6f} {y_new:.6f} {w:.6f} {h:.6f}\n"
+                new_lines.append(new_line)
+        with open(out_path, 'w') as fout:
+            fout.writelines(new_lines)
 import cv2
 import numpy as np
 import json
@@ -56,28 +95,42 @@ def process_video(video_path, calib_path, output_path):
     print(f"Finished processing video: {video_path}")
 
 def main():
-    video_files = glob.glob("out*.mp4") # path to the video files
-    output_dir = ".\\" # folder path where to save the rectified videos
+    video_files = glob.glob("./dataset/video/out*.mp4") # path to the video files
+    output_dir = "./rectified/" # folder path where to save the rectified videos
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
+
+    # Rettifica anche le label YOLO
     for video_path in video_files:
-        print("Processing video:", video_path)
         basename = os.path.basename(video_path)
         match = re.search(r'out(\d+)\.mp4', basename)
         if match:
             cam_index = match.group(1)
-            
-            calib_path = os.path.join(".\\", "camera_data", f"cam_{cam_index}", "calib", "camera_calib.json")
+            calib_path = os.path.join("Camera_config2", f"cam_{cam_index}", "calib", "camera_calib.json")
+            label_dir = os.path.join("dataset", "infer_video", f"labels_out{cam_index}")
+            output_label_dir = os.path.join(output_dir, f"labels_out{cam_index}")
+            # Ricava dimensione immagine dal video
+            cap = cv2.VideoCapture(video_path)
+            ret, frame = cap.read()
+            if not ret:
+                print(f"Impossibile leggere {video_path} per dimensione immagine")
+                continue
+            img_h, img_w = frame.shape[:2]
+            cap.release()
+            rectify_labels(label_dir, calib_path, img_w, img_h, output_label_dir)
+
+    for video_path in video_files:
+        basename = os.path.basename(video_path)
+        match = re.search(r'out(\d+)\.mp4', basename)
+        if match:
+            cam_index = match.group(1)
+            calib_path = os.path.join("Camera_config2", f"cam_{cam_index}", "calib", "camera_calib.json")
         else:
             print("Could not extract camera index from filename:", video_path)
             continue
-        
-        ## Create one folder for each sample e.g. tracking_01, mocap_1, hpe_1
         output_path = os.path.join(output_dir, '', basename)
         if not os.path.exists(os.path.join(output_dir, '')):
             os.makedirs(os.path.join(output_dir, ''))
-            
         print(f"Processing {video_path} using calibration file {calib_path}...")
         process_video(video_path, calib_path, output_path)
 

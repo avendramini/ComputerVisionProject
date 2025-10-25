@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, List, Tuple
+import csv
+import math
+
+import numpy as np
+
+# Matplotlib for interactive 3D visualization
+import matplotlib
+from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
+
+# Reuse calibration loader
+from triangulation_3d import load_calibrations_for_cams
+
+
+def load_points_csv(csv_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, float, float]]], List[int]]:
+	"""Load points.csv into a frame-indexed structure.
+
+	Returns:
+	  - frames_points: {frame: [(class_id, x, y, z), ...]}
+	  - sorted unique class ids present
+	"""
+	frames_points: Dict[int, List[Tuple[int, float, float, float]]] = {}
+	classes = set()
+	with csv_path.open("r", encoding="utf-8") as f:
+		reader = csv.DictReader(f)
+		for row in reader:
+			fi = int(row["frame"]) if "frame" in row else int(row["Frame"])  # tolerant
+			ci = int(row["class_id"]) if "class_id" in row else int(row.get("class", 0))
+			x = float(row.get("x_m", row.get("x", 0.0)))
+			y = float(row.get("y_m", row.get("y", 0.0)))
+			z = float(row.get("z_m", row.get("z", 0.0)))
+			frames_points.setdefault(fi, []).append((ci, x, y, z))
+			classes.add(ci)
+	return frames_points, sorted(classes)
+
+
+def find_available_cams(camparams_dir: Path = Path("camparams")) -> List[int]:
+	cams: List[int] = []
+	if not camparams_dir.exists():
+		return cams
+	for p in camparams_dir.glob("out*_camera_calib.json"):
+		name = p.stem  # e.g. out13_camera_calib
+		try:
+			num = int(name.replace("out", "").split("_")[0])
+			cams.append(num)
+		except Exception:
+			continue
+	return sorted(set(cams))
+
+
+def compute_camera_centers(calibs: Dict[int, Dict[str, np.ndarray]]) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+    """Compute camera centers C and view directions dir (world) from calibrations.
+
+    Returns {cam_id: (C (3,), dir (3,))}
+    """
+    import cv2  # local import
+    
+    result: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+    for cam, params in calibs.items():
+        K = params.get("K")
+        rvec = params.get("rvec")
+        tvec = params.get("tvec")
+        if K is None or rvec is None or tvec is None:
+            continue
+        R, _ = cv2.Rodrigues(rvec)
+        R = R.astype(np.float64)
+        # tvec è in millimetri, convertiamo in metri
+        t = (tvec.reshape(3, 1) / 1000.0).astype(np.float64)
+        C = (-R.T @ t).reshape(3)  # camera center in world (metri)
+        z_axis_world = (R.T @ np.array([0.0, 0.0, 1.0])).reshape(3)
+        result[cam] = (C, z_axis_world / (np.linalg.norm(z_axis_world) + 1e-9))
+    return result
+def draw_court(ax, width_m: float = 28.0, length_m: float = 15.0, height_axis: str = "z"):
+	"""Draw a simple basketball court rectangle on ground plane.
+
+	height_axis: 'z' assumes ground plane z=0; if 'y', ground plane y=0
+	"""
+	hw = width_m / 2.0
+	hl = length_m / 2.0
+	rect = [(-hw, -hl), (hw, -hl), (hw, hl), (-hw, hl), (-hw, -hl)]
+	if height_axis == "z":
+		xs = [x for x, y in rect]
+		ys = [y for x, y in rect]
+		zs = [0.0] * len(xs)
+		ax.plot(xs, ys, zs, color="gray", linewidth=2)
+	else:
+		xs = [x for x, y in rect]
+		zs = [y for x, y in rect]
+		ys = [0.0] * len(xs)
+		ax.plot(xs, ys, zs, color="gray", linewidth=2)
+
+
+def set_equal_aspect_3d(ax, X, Y, Z):
+	max_range = np.array([X.max()-X.min(), Y.max()-Y.min(), Z.max()-Z.min()]).max()
+	if max_range <= 0:
+		max_range = 1.0
+	mid_x = (X.max()+X.min()) * 0.5
+	mid_y = (Y.max()+Y.min()) * 0.5
+	mid_z = (Z.max()+Z.min()) * 0.5
+	ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
+	ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
+	ax.set_zlim(mid_z - max_range/2, mid_z + max_range/2)
+
+
+class FrameViewer3D:
+    def __init__(self, frames_points: Dict[int, List[Tuple[int, float, float, float]]], classes: List[int], calibs: Dict[int, Dict[str, np.ndarray]] | None = None):
+        self.frames_points = frames_points
+        self.sorted_frames = sorted(frames_points.keys())
+        self.classes = classes
+        self.calibs = calibs or {}
+        self.cam_geom = compute_camera_centers(self.calibs) if self.calibs else {}
+
+        # Compute global fixed bounds to include court + all points + cameras
+        court_width = 28.0
+        court_length = 15.0
+        
+        all_pts = [(x,y,z) for pts in frames_points.values() for (_c,x,y,z) in pts]
+        
+        # Start with court bounds
+        x_min, x_max = -court_width/2 - 2, court_width/2 + 2
+        y_min, y_max = -court_length/2 - 2, court_length/2 + 2
+        z_min, z_max = -1, 5  # ground to reasonable height
+        
+        # Expand to include all data points
+        if all_pts:
+            arr = np.array(all_pts)
+            x_min = min(x_min, arr[:,0].min() - 1)
+            x_max = max(x_max, arr[:,0].max() + 1)
+            y_min = min(y_min, arr[:,1].min() - 1)
+            y_max = max(y_max, arr[:,1].max() + 1)
+            z_min = min(z_min, arr[:,2].min() - 1)
+            z_max = max(z_max, arr[:,2].max() + 1)
+        
+        # Expand to include cameras
+        for cam, (C, _dir) in self.cam_geom.items():
+            x_min = min(x_min, C[0] - 2)
+            x_max = max(x_max, C[0] + 2)
+            y_min = min(y_min, C[1] - 2)
+            y_max = max(y_max, C[1] + 2)
+            z_min = min(z_min, C[2] - 2)
+            z_max = max(z_max, C[2] + 2)
+        
+        self.fixed_bounds = (x_min, x_max, y_min, y_max, z_min, z_max)
+
+        # Simple color map for classes
+        cmap = plt.cm.get_cmap('tab20', max(len(classes), 1))
+        self.class_colors = {cid: cmap(i % 20) for i, cid in enumerate(classes)}
+        
+        # Assume height axis is z (as used in triangulation outputs)
+        self.height_axis = 'z'
+
+        # Matplotlib setup
+        self.fig = plt.figure(figsize=(10, 8))
+        self.ax: Axes3D = self.fig.add_subplot(111, projection='3d')
+        self.scatter = None
+        self.title = None
+        self.current_index = 0
+
+        self.fig.canvas.mpl_connect('key_press_event', self.on_key)
+        self.draw_frame(self.sorted_frames[self.current_index])
+
+    def on_key(self, event):
+        if event.key in ['right', 'd']:
+            self.current_index = min(self.current_index + 1, len(self.sorted_frames) - 1)
+            self.draw_frame(self.sorted_frames[self.current_index])
+        elif event.key in ['left', 'a']:
+            self.current_index = max(self.current_index - 1, 0)
+            self.draw_frame(self.sorted_frames[self.current_index])
+        elif event.key == 'home':
+            self.current_index = 0
+            self.draw_frame(self.sorted_frames[self.current_index])
+        elif event.key == 'end':
+            self.current_index = len(self.sorted_frames) - 1
+            self.draw_frame(self.sorted_frames[self.current_index])
+
+    def draw_cameras(self):
+        if not self.cam_geom:
+            return
+        for cam, (C, dir_vec) in self.cam_geom.items():
+            self.ax.scatter([C[0]], [C[1]], [C[2]], marker='^', color='black', s=50)
+            # small ray to show view direction
+            tip = C + dir_vec * 1.0
+            self.ax.plot([C[0], tip[0]], [C[1], tip[1]], [C[2], tip[2]], color='black', linewidth=1)
+            self.ax.text(C[0], C[1], C[2], f"cam {cam}", color='black')
+
+    def draw_frame(self, frame_idx: int):
+        self.ax.clear()
+
+        # Draw court
+        draw_court(self.ax, width_m=28.0, length_m=15.0, height_axis=self.height_axis)
+
+        # Draw cameras if available
+        self.draw_cameras()
+
+        # Points for this frame
+        pts = self.frames_points.get(frame_idx, [])
+        if pts:
+            X = np.array([[x, y, z] for (_c, x, y, z) in pts])
+            colors = [self.class_colors[cid] for (cid, _x, _y, _z) in pts]
+            self.ax.scatter(X[:,0], X[:,1], X[:,2], c=colors, s=40, depthshade=True)
+
+        # Add legend for classes present in this frame
+        classes_in_frame = sorted(set(cid for (cid, _x, _y, _z) in pts))
+        if classes_in_frame:
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=self.class_colors[cid], label=f'Class {cid}') 
+                             for cid in classes_in_frame]
+            self.ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
+
+        # Axes labels and limits
+        self.ax.set_xlabel('X (m)')
+        self.ax.set_ylabel('Y (m)')
+        self.ax.set_zlabel('Z (m) [height]')
+
+        # Use fixed global bounds
+        xmin, xmax, ymin, ymax, zmin, zmax = self.fixed_bounds
+        self.ax.set_xlim(xmin, xmax)
+        self.ax.set_ylim(ymin, ymax)
+        self.ax.set_zlim(zmin, zmax)
+
+        self.ax.set_title(f"Frame {frame_idx} | {len(pts)} punti")
+        plt.draw()
+
+def main():
+	# Load triangulated points
+	csv_path = Path('runs') / 'triangulation' / 'points.csv'
+	if not csv_path.exists():
+		print(f"File non trovato: {csv_path}. Esegui prima triangulation_3d.py per generarlo.")
+		return
+
+	frames_points, classes = load_points_csv(csv_path)
+
+	# Try to load camera params (optional)
+	cams = find_available_cams(Path('camparams'))
+	calibs = load_calibrations_for_cams(cams) if cams else {}
+
+	viewer = FrameViewer3D(frames_points, classes, calibs if calibs else None)
+	print("Navigazione: frecce sinistra/destra (o A/D), Home, End")
+	plt.show()
+
+
+if __name__ == '__main__':
+	main()
