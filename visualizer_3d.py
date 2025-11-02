@@ -14,6 +14,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
 
 # Reuse calibration loader
 from triangulation_3d import load_calibrations_for_cams
+import json
 
 
 def load_points_csv(csv_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, float, float]]], List[int]]:
@@ -36,6 +37,26 @@ def load_points_csv(csv_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, fl
 			frames_points.setdefault(fi, []).append((ci, x, y, z))
 			classes.add(ci)
 	return frames_points, sorted(classes)
+
+def load_points_json(json_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, float, float]]], List[int]]:
+    """Load points.json with schema {frames: {"0":[{class_id,x,y,z},...]}} into same structure as CSV loader."""
+    with json_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    frames_points: Dict[int, List[Tuple[int, float, float, float]]] = {}
+    classes = set()
+    frames = data.get("frames", {})
+    for k, items in frames.items():
+        fi = int(k)
+        lst: List[Tuple[int, float, float, float]] = []
+        for it in items:
+            cid = int(it.get("class_id", 0))
+            x = float(it.get("x", 0.0))
+            y = float(it.get("y", 0.0))
+            z = float(it.get("z", 0.0))
+            lst.append((cid, x, y, z))
+            classes.add(cid)
+        frames_points[fi] = lst
+    return frames_points, sorted(classes)
 
 
 def find_available_cams(camparams_dir: Path = Path("camparams")) -> List[int]:
@@ -225,23 +246,54 @@ class FrameViewer3D:
         self.ax.set_title(f"Frame {frame_idx} | {len(pts)} punti")
         plt.draw()
 
+def visualize_triangulated_points(points_json: Path | None = None, points_csv: Path | None = None, camparams_dir: Path = Path('camparams')):
+    """
+    Visualizza i punti triangolati in modo interattivo.
+    
+    Args:
+        points_json: Percorso al file points.json (prioritario se fornito)
+        points_csv: Percorso al file points.csv (fallback)
+        camparams_dir: Directory con le calibrazioni delle camere
+    
+    Se nessun file è specificato, cerca automaticamente in runs/triangulation/
+    """
+    # Load triangulated points (prefer JSON, fallback to CSV)
+    if points_json is None and points_csv is None:
+        base_dir = Path('runs') / 'triangulation'
+        points_json = base_dir / 'points.json'
+        points_csv = base_dir / 'points.csv'
+    
+    frames_points = None
+    classes = []
+    
+    if points_json and points_json.exists():
+        frames_points, classes = load_points_json(points_json)
+    elif points_csv and points_csv.exists():
+        frames_points, classes = load_points_csv(points_csv)
+    else:
+        print(f"Punti non trovati in {points_json} o {points_csv}. Esegui triangulation_3d.py.")
+        return
+
+    # Try to load camera params (optional)
+    cams = find_available_cams(camparams_dir)
+    calibs = load_calibrations_for_cams(cams) if cams else {}
+
+    viewer = FrameViewer3D(frames_points, classes, calibs if calibs else None)
+    print("Navigazione: frecce sinistra/destra (o A/D), Home, End")
+    plt.show()
+
+
 def main():
-	# Load triangulated points
-	csv_path = Path('runs') / 'triangulation' / 'points.csv'
-	if not csv_path.exists():
-		print(f"File non trovato: {csv_path}. Esegui prima triangulation_3d.py per generarlo.")
-		return
-
-	frames_points, classes = load_points_csv(csv_path)
-
-	# Try to load camera params (optional)
-	cams = find_available_cams(Path('camparams'))
-	calibs = load_calibrations_for_cams(cams) if cams else {}
-
-	viewer = FrameViewer3D(frames_points, classes, calibs if calibs else None)
-	print("Navigazione: frecce sinistra/destra (o A/D), Home, End")
-	plt.show()
+    """Entry point per esecuzione standalone da CLI"""
+    visualize_triangulated_points()
 
 
 if __name__ == '__main__':
 	main()
+
+# ----------------------------------------
+# How to run (PowerShell)
+# ----------------------------------------
+# Visualizza i punti triangolati (preferisce runs/triangulation/points.json, fallback a CSV):
+#   python visualizer_3d.py
+# Navigazione: frecce sinistra/destra (o A/D) per frame precedente/successivo, Home/End per primo/ultimo.

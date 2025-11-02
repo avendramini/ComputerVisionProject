@@ -4,6 +4,7 @@ import os
 import json
 import random
 import csv
+from datetime import datetime
 
 import numpy as np
 import cv2
@@ -315,9 +316,11 @@ if __name__ == "__main__":
 	out_dir = Path("runs") / "triangulation"
 	out_dir.mkdir(parents=True, exist_ok=True)
 	out_csv = out_dir / "points.csv"
+	out_json = out_dir / "points.json"
 
 	# Salva CSV con colonne: frame,class_id,x,y,z
 	total_points = 0
+	json_frames: Dict[int, List[Dict[str, float]]] = {}
 	with out_csv.open("w", newline="", encoding="utf-8") as f:
 		writer = csv.writer(f)
 		writer.writerow(["frame", "class_id", "x_m", "y_m", "z_m"])
@@ -325,6 +328,31 @@ if __name__ == "__main__":
 			for cls_id, X in res.items():
 				writer.writerow([fi, cls_id, float(X[0]), float(X[1]), float(X[2])])
 				total_points += 1
+				json_frames.setdefault(fi, []).append({
+					"class_id": int(cls_id),
+					"x": float(X[0]),
+					"y": float(X[1]),
+					"z": float(X[2])
+				})
 
-	print(f"Salvato {total_points} punti triangolati in {out_csv}")
+	# Save JSON aggregate
+	payload = {
+		"generated_at": datetime.utcnow().isoformat() + "Z",
+		"units": "meters",
+		"frames": {str(k): v for k, v in json_frames.items()}
+	}
+	with out_json.open("w", encoding="utf-8") as jf:
+		json.dump(payload, jf)
+
+	print(f"Salvati {total_points} punti triangolati in {out_csv} e {out_json}")
+
+# ----------------------------------------
+# How to run (PowerShell)
+# ----------------------------------------
+# Triangola tutti i frame usando le label YOLO per le camere [13,2,4] sotto 'rectified/labels_outX':
+#   python triangulation_3d.py
+# Note:
+# - Richiede i file di calibrazione: camparams/out{cam}_camera_calib.json
+# - Preferisci usare la pipeline unificata se lavori con dataset/infer_video:
+#   python pipeline.py --interpolate --labels-dir dataset/infer_video --visualize
 

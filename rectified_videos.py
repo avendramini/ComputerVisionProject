@@ -136,3 +136,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ----------------------------------------
+# How to run (PowerShell)
+# ----------------------------------------
+# Rettifica tutti i video in dataset/video/out*.mp4 secondo le calibrazioni e salva in ./rectified/:
+#   python rectified_videos.py
+# Nota: Il percorso delle calibrazioni è impostato su Camera_config2/cam_{id}/calib/camera_calib.json;
+# adatta questi percorsi se le tue calibrazioni sono in cartelle diverse (es. camparams/...).

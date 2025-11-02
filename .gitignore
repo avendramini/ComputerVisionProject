@@ -55,3 +55,4 @@ env/
 ENV/
 *.env
 CVproject/
+action/
