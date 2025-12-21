@@ -124,10 +124,18 @@ def save_tracks_json(tracks_by_frame: Dict[int, Dict[int, Dict]], output_file: P
     print(f"[TRACK-2D] JSON salvato: {output_file}")
 
 
-def run_video_inference(video_path: Path, model_path: str, labels_base: Path, device: str = 'auto'):
+def run_video_inference(video_path: Path, model_path: str, labels_base: Path, device: str = 'auto', conf_thres: float = 0.25, imgsz: int = 1920):
     """
     Esegue inferenza YOLO su un video e salva le labels in un unico JSON per camera.
     Estrae il numero di camera dal nome del video (es. out13.mp4 -> cam 13).
+    
+    Args:
+        video_path: Path al video input
+        model_path: Path ai pesi del modello YOLO
+        labels_base: Directory dove salvare il JSON delle labels
+        device: Device per inferenza ('auto', 'cpu', '0', etc.)
+        conf_thres: Confidence threshold per filtrare predizioni (default: 0.25)
+        imgsz: Dimensione immagine per inferenza (default: 1920)
     """
     print(f"[INFERENCE] Carico modello {model_path}...")
     model = YOLO(model_path)
@@ -145,7 +153,7 @@ def run_video_inference(video_path: Path, model_path: str, labels_base: Path, de
     if not cap.isOpened():
         raise RuntimeError(f"Impossibile aprire video: {video_path}")
     
-    frame_idx = 0
+    frame_idx = 1  # Start from 1 to match dataset conventions (frame_0001)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     all_frames = {}
     
@@ -154,8 +162,8 @@ def run_video_inference(video_path: Path, model_path: str, labels_base: Path, de
         if not ret:
             break
         
-        # YOLO predict
-        results = model.predict(source=frame, device=device, verbose=False, imgsz=1920)
+        # YOLO predict con confidence threshold configurabile
+        results = model.predict(source=frame, device=device, conf=conf_thres, verbose=False, imgsz=imgsz)
         result = results[0]
         
         # Filtra best per classe
@@ -208,6 +216,91 @@ def run_video_inference(video_path: Path, model_path: str, labels_base: Path, de
     
     print(f"[INFERENCE] Completato: {frame_idx} frame salvati in {out_json}")
     return cam_num if m else None
+
+
+def run_images_inference(images_dir: Path, model_path: str, labels_base: Path, device: str = 'auto', conf_thres: float = 0.25):
+    """
+    Esegue inferenza YOLO su una directory di immagini e salva le labels in JSON per camera.
+    Supporta pattern filename: out{cam}_frame_{num}_...
+    """
+    print(f"[INFERENCE] Carico modello {model_path}...")
+    model = YOLO(model_path)
+    
+    print(f"[INFERENCE] Scansione immagini in: {images_dir}")
+    image_files = sorted(list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png")))
+    
+    if not image_files:
+        print("[INFERENCE] Nessuna immagine trovata.")
+        return []
+
+    # Struttura: {cam_id: {frame_idx: [detections]}}
+    per_cam_results = {}
+    
+    # Regex per estrarre cam e frame
+    pattern = re.compile(r"out(\d+)_frame_(\d+)_")
+    
+    count = 0
+    for img_path in image_files:
+        match = pattern.search(img_path.name)
+        if not match:
+            continue
+            
+        cam_id = int(match.group(1))
+        frame_idx = int(match.group(2))
+        
+        if cam_id not in per_cam_results:
+            per_cam_results[cam_id] = {}
+            
+        # Inference
+        results = model.predict(source=str(img_path), device=device, conf=conf_thres, verbose=False, imgsz=1920)
+        result = results[0]
+        
+        # Filtra best per classe
+        best_per_class = {}
+        if hasattr(result, 'boxes') and result.boxes is not None:
+            for box in result.boxes:
+                if box.cls is None or box.conf is None:
+                    continue
+                cls_id = int(box.cls.item())
+                conf = float(box.conf.item())
+                if cls_id not in best_per_class or conf > best_per_class[cls_id][0]:
+                    best_per_class[cls_id] = (conf, box)
+        
+        items = []
+        for cls_id, (conf, box) in best_per_class.items():
+            xywh = box.xywh[0].cpu().numpy()
+            x, y, w, h = xywh
+            items.append({
+                "class_id": int(cls_id),
+                "x": float(x),
+                "y": float(y),
+                "w": float(w),
+                "h": float(h),
+                "conf": float(conf)
+            })
+            
+        per_cam_results[cam_id][str(frame_idx)] = items
+        count += 1
+        if count % 50 == 0:
+            print(f"[INFERENCE] Processate {count} immagini...")
+
+    # Salva i risultati
+    labels_base.mkdir(parents=True, exist_ok=True)
+    saved_cams = []
+    
+    for cam_id, frames in per_cam_results.items():
+        out_file = labels_base / f"labels_out{cam_id}.json"
+        payload = {
+            "camera": cam_id,
+            "coord_mode": "pixel",
+            "frames": frames
+        }
+        with out_file.open("w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        print(f"[INFERENCE] Salvato {out_file} con {len(frames)} frame")
+        saved_cams.append(cam_id)
+    
+    return saved_cams
 
 
 # Colori mappati per indice di classe (BGR OpenCV)
@@ -464,6 +557,186 @@ def main():
         cv2.imshow('detections', to_show)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+
+
+def save_tracked_video_from_images(frames_data: Dict[int, Dict[int, Dict]], images_dir: Path, output_path: Path, fps: int = 25, camera_id: int = None):
+    """
+    Genera un video MP4 dalle immagini nella directory, disegnando le bounding box e i track ID.
+    
+    Args:
+        frames_data: Dict {frame_idx: {cls_id: {x, y, w, h, track_id, ...}}}
+        images_dir: Directory contenente le immagini sorgente (out{cam}_frame_{num}...)
+        output_path: Path del file video output (.mp4)
+        fps: Frame rate del video output (default 25)
+        camera_id: ID della camera per filtrare le immagini
+    """
+    import cv2
+    import re
+    import numpy as np
+    
+    images = sorted(list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png")))
+    if not images:
+        print(f"[TRACK-VIDEO] Nessuna immagine trovata in {images_dir}")
+        return
+
+    # Filtra immagini per camera
+    cam_images = []
+    pattern = re.compile(r"out(\d+)_frame_(\d+)_")
+    
+    for img_path in images:
+        m = pattern.search(img_path.name)
+        if m:
+            c_id = int(m.group(1))
+            f_idx = int(m.group(2))
+            if camera_id is not None and c_id != camera_id:
+                continue
+            cam_images.append((f_idx, img_path))
+    
+    # Ordina per frame index
+    cam_images.sort(key=lambda x: x[0])
+    
+    # Rimuovi duplicati (mantieni solo la prima immagine per ogni frame index)
+    unique_cam_images = []
+    seen_frames = set()
+    for f_idx, img_path in cam_images:
+        if f_idx not in seen_frames:
+            unique_cam_images.append((f_idx, img_path))
+            seen_frames.add(f_idx)
+    cam_images = unique_cam_images
+    
+    if not cam_images:
+        print(f"[TRACK-VIDEO] Nessuna immagine trovata per camera {camera_id}")
+        return
+
+    # Leggi prima immagine per dimensioni
+    first_img = cv2.imread(str(cam_images[0][1]))
+    if first_img is None:
+        print(f"[TRACK-VIDEO] Errore lettura immagine {cam_images[0][1]}")
+        return
+    
+    h, w = first_img.shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+    
+    print(f"[TRACK-VIDEO] Generazione video {output_path} ({len(cam_images)} frames, {fps} fps)...")
+    
+    # Colori mappati per indice di classe (BGR OpenCV)
+    # Usa CLASS_COLORS se disponibile, altrimenti fallback
+    colors = CLASS_COLORS if 'CLASS_COLORS' in globals() else []
+    
+    for f_idx, img_path in cam_images:
+        frame = cv2.imread(str(img_path))
+        if frame is None:
+            continue
+            
+        # Disegna detections
+        if f_idx in frames_data:
+            for cls_id, det in frames_data[f_idx].items():
+                x, y, bw, bh = det['x'], det['y'], det['w'], det['h']
+                tid = det.get('track_id', -1)
+                
+                # Coordinate pixel (x,y centro)
+                x1 = int(x - bw/2)
+                y1 = int(y - bh/2)
+                x2 = int(x + bw/2)
+                y2 = int(y + bh/2)
+                
+                # Usa colore basato sulla classe, non sul track_id
+                cls_id_int = int(cls_id)
+                if colors:
+                    color = colors[cls_id_int % len(colors)]
+                else:
+                    color = (0, 255, 0)
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                label = f"ID:{tid} C:{cls_id_int}"
+                cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        out.write(frame)
+    
+    out.release()
+    print(f"[TRACK-VIDEO] Video salvato: {output_path}")
+
+
+def save_tracked_video_from_video(frames_data: Dict[int, Dict[int, Dict]], video_path: Path, output_path: Path):
+    """
+    Genera un video MP4 partendo da un video sorgente, disegnando le bounding box e i track ID.
+    
+    Args:
+        frames_data: Dict {frame_idx: {cls_id: {x, y, w, h, track_id, ...}}}
+        video_path: Path del video sorgente input
+        output_path: Path del file video output (.mp4)
+    """
+    import cv2
+    import numpy as np
+    
+    if not video_path.exists():
+        print(f"[TRACK-VIDEO] Video sorgente non trovato: {video_path}")
+        return
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"[TRACK-VIDEO] Impossibile aprire video sorgente: {video_path}")
+        return
+        
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_path), fourcc, fps, (w, h))
+    
+    print(f"[TRACK-VIDEO] Generazione video {output_path} da {video_path.name}...")
+    
+    # Colori mappati per indice di classe (BGR OpenCV)
+    # Usa CLASS_COLORS se disponibile, altrimenti fallback
+    colors = CLASS_COLORS if 'CLASS_COLORS' in globals() else []
+    
+    frame_idx = 1  # Start from 1 to match inference indexing
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Disegna detections se presenti per questo frame
+        if frame_idx in frames_data:
+            for cls_id, det in frames_data[frame_idx].items():
+                x, y, bw, bh = det['x'], det['y'], det['w'], det['h']
+                tid = det.get('track_id', -1)
+                
+                # Coordinate pixel (x,y centro)
+                x1 = int(x - bw/2)
+                y1 = int(y - bh/2)
+                x2 = int(x + bw/2)
+                y2 = int(y + bh/2)
+                
+                # Usa colore basato sulla classe, non sul track_id
+                cls_id_int = int(cls_id)
+                if colors:
+                    color = colors[cls_id_int % len(colors)]
+                else:
+                    color = (0, 255, 0)
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                
+                label = f"ID:{tid} C:{cls_id_int}"
+                cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        out.write(frame)
+        frame_idx += 1
+        
+        if frame_idx % 100 == 0:
+            print(f"[TRACK-VIDEO] Processati {frame_idx}/{total_frames} frames", end='\r')
+            
+    print("")
+    cap.release()
+    out.release()
+    print(f"[TRACK-VIDEO] Video salvato: {output_path}")
+
 
 if __name__ == '__main__':
     main()

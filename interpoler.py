@@ -94,12 +94,13 @@ def interpolate_missing_detections(frames, max_frame, max_gap=10):
     print(f"[INFO] Classi trovate: {sorted(all_classes)}")
     
     # Per ogni classe, interpola i frame mancanti
+    total_interpolated = 0
     for cls_id in sorted(all_classes):
         # Trova tutti i frame dove questa classe è presente
         frames_with_class = sorted([f for f in frames.keys() if cls_id in frames[f]])
         
         if len(frames_with_class) < 2:
-            print(f"[WARN] Classe {cls_id}: solo {len(frames_with_class)} detection, skip interpolazione")
+            # print(f"[WARN] Classe {cls_id}: solo {len(frames_with_class)} detection, skip interpolazione")
             continue
         
         interpolated_count = 0
@@ -135,8 +136,10 @@ def interpolate_missing_detections(frames, max_frame, max_gap=10):
                 ]
                 interpolated_count += 1
         
-        print(f"[INFO] Classe {cls_id}: {interpolated_count} detection interpolate")
+        total_interpolated += interpolated_count
+        # print(f"[INFO] Classe {cls_id}: {interpolated_count} detection interpolate")
     
+    print(f"[INFO] Interpolated {total_interpolated} detections for this camera.")
     return interpolated
 
 

@@ -47,6 +47,8 @@ def load_points_json(json_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, 
     frames = data.get("frames", {})
     for k, items in frames.items():
         fi = int(k)
+        if not items:
+            continue
         lst: List[Tuple[int, float, float, float]] = []
         for it in items:
             cid = int(it.get("class_id", 0))
@@ -197,6 +199,131 @@ class FrameViewer3D:
         elif event.key == 'end':
             self.current_index = len(self.sorted_frames) - 1
             self.draw_frame(self.sorted_frames[self.current_index])
+        elif event.key == 's':
+            self.save_top_down_trajectories()
+
+    def save_top_down_trajectories(self):
+        """Save top-down view (X-Y) of trajectories for each class to files."""
+        output_dir = Path('runs') / 'trajectories'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Saving trajectory plots to {output_dir}...")
+
+        # Collect all points by class
+        class_points = {cid: [] for cid in self.classes}
+        for frame_idx in self.sorted_frames:
+            pts = self.frames_points[frame_idx]
+            for (cid, x, y, z) in pts:
+                if cid in class_points:
+                    class_points[cid].append((frame_idx, x, y))
+        
+        # Generate one plot per class
+        for cid, points in class_points.items():
+            if not points:
+                continue
+            
+            # Create figure
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # Draw court (28x15)
+            # Court is centered at 0,0. Width=28 (X), Length=15 (Y) based on draw_court logic?
+            # Wait, draw_court uses: width_m=28, length_m=15.
+            # rect = [(-hw, -hl), (hw, -hl), (hw, hl), (-hw, hl), (-hw, -hl)]
+            # hw = width/2 = 14. hl = length/2 = 7.5.
+            # So X goes from -14 to 14. Y goes from -7.5 to 7.5.
+            
+            hw = 28.0 / 2.0
+            hl = 15.0 / 2.0
+            rect_x = [-hw, hw, hw, -hw, -hw]
+            rect_y = [-hl, -hl, hl, hl, -hl]
+            ax.plot(rect_x, rect_y, 'k-', linewidth=2, label='Court Boundary')
+            
+            # Sort points by frame
+            points.sort(key=lambda p: p[0])
+            xs = [p[1] for p in points]
+            ys = [p[2] for p in points]
+            
+            color = self.class_colors.get(cid, 'blue')
+            
+            # Plot trajectory
+            ax.plot(xs, ys, c=color, linewidth=1, alpha=0.6, label='Trajectory')
+            ax.scatter(xs, ys, c=color, s=10, alpha=0.8)
+            
+            # Mark start and end
+            if xs:
+                ax.plot(xs[0], ys[0], 'go', markersize=8, label='Start')
+                ax.plot(xs[-1], ys[-1], 'rx', markersize=8, label='End')
+
+            ax.set_title(f'Trajectory - Class {cid}')
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Y (m)')
+            ax.set_aspect('equal')
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            
+            # Set limits with some padding
+            ax.set_xlim(-16, 16)
+            ax.set_ylim(-9, 9)
+            
+            out_path = output_dir / f'trajectory_class_{cid}.png'
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            print(f"Saved {out_path}")
+        
+        print("Done saving trajectories.")
+
+    def save_side_view_trajectory_ball(self):
+        """Save side view (X-Z) of trajectory for Ball (class 0)."""
+        output_dir = Path('runs') / 'trajectories'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        cid = 0  # Ball class
+        if cid not in self.classes:
+            return
+
+        # Collect points
+        points = []
+        for frame_idx in self.sorted_frames:
+            pts = self.frames_points[frame_idx]
+            for (c, x, y, z) in pts:
+                if c == cid:
+                    points.append((frame_idx, x, z))
+        
+        if not points:
+            return
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Draw ground line (-14 to 14)
+        ax.plot([-14, 14], [0, 0], 'k-', linewidth=2, label='Ground')
+        
+        points.sort(key=lambda p: p[0])
+        xs = [p[1] for p in points]
+        zs = [p[2] for p in points]
+        
+        color = self.class_colors.get(cid, 'orange')
+        
+        ax.plot(xs, zs, c=color, linewidth=1, alpha=0.6, label='Trajectory')
+        ax.scatter(xs, zs, c=color, s=10, alpha=0.8)
+        
+        if xs:
+            ax.plot(xs[0], zs[0], 'go', markersize=8, label='Start')
+            ax.plot(xs[-1], zs[-1], 'rx', markersize=8, label='End')
+
+        ax.set_title(f'Side View Trajectory (Length vs Height) - Class {cid} (Ball)')
+        ax.set_xlabel('Length X (m)')
+        ax.set_ylabel('Height Z (m)')
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        # Limits
+        ax.set_xlim(-15, 15)
+        ax.set_ylim(0, 6)  # Reasonable height for basketball
+        
+        out_path = output_dir / f'trajectory_side_class_{cid}.png'
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved {out_path}")
 
     def draw_cameras(self):
         if not self.cam_geom:
@@ -243,6 +370,9 @@ class FrameViewer3D:
         self.ax.set_ylim(ymin, ymax)
         self.ax.set_zlim(zmin, zmax)
 
+        # Set aspect ratio to match the data ranges so the court doesn't look square
+        self.ax.set_box_aspect((xmax - xmin, ymax - ymin, zmax - zmin))
+
         self.ax.set_title(f"Frame {frame_idx} | {len(pts)} punti")
         plt.draw()
 
@@ -279,7 +409,13 @@ def visualize_triangulated_points(points_json: Path | None = None, points_csv: P
     calibs = load_calibrations_for_cams(cams) if cams else {}
 
     viewer = FrameViewer3D(frames_points, classes, calibs if calibs else None)
+    
+    # Automatically save trajectories on startup
+    viewer.save_top_down_trajectories()
+    viewer.save_side_view_trajectory_ball()
+
     print("Navigazione: frecce sinistra/destra (o A/D), Home, End")
+    print("Funzioni: 's' per salvare le traiettorie (vista dall'alto) come immagini")
     plt.show()
 
 

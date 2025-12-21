@@ -2,7 +2,6 @@ import os
 from ultralytics import YOLO
 import yaml
 import torch
-print(torch.cuda.device_count())
 def create_dataset_yaml(train_path, val_path, class_names, save_path="dataset.yaml"):
     """Create dataset configuration file for YOLO training.
 
@@ -58,7 +57,7 @@ def fine_tune_yolo(model_size='yolov8n.pt', dataset_yaml='dataset.yaml', epochs=
         epochs=epochs,
         imgsz=imgsz,
         patience=50,
-        batch=4,
+        batch=2,
         device=0  # Use GPU if available
     )
     
@@ -98,10 +97,10 @@ if __name__ == "__main__":
         model_size='yolov8n.pt',  # Options: yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
         dataset_yaml=dataset_yaml,
         epochs=100,
-        imgsz=1920
+        imgsz=3840
     )
     
     # Save the trained model
-    model.save('fine_tuned_yolo.pt')
+    model.save('last_run3840.pt')
     
     print("Fine-tuning completed!")

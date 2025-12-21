@@ -18,8 +18,9 @@ Minimizza I/O su disco operando in memoria dove possibile.
 from __future__ import annotations
 
 from pathlib import Path
+import cv2
+import numpy as np
 from typing import Dict, List, Tuple
-import argparse
 import json
 import numpy as np
 import cv2
@@ -27,7 +28,8 @@ import cv2
 # Local modules
 import triangulation_3d as tri
 from interpoler import load_labels_for_camera, interpolate_missing_detections, save_interpolated_json
-from tracking_2d import track_labels_for_camera, save_tracks_json, run_video_inference
+from tracking_2d import track_labels_for_camera, save_tracks_json, run_video_inference, run_images_inference
+from config import get_args, PipelineConfig
 
 # Type aliases per strutture dati comuni
 Det = Tuple[float, float, float, float, float]  # Detection: (x, y, width, height, confidence)
@@ -225,10 +227,76 @@ def _rectify_frames_in_memory(frames: PerFrame, K: np.ndarray, dist: np.ndarray)
 	return rect
 
 
+def filter_3d_movements(results_per_frame: List[Dict[int, np.ndarray]], idxs: List[int]) -> List[Dict[int, np.ndarray]]:
+    """
+    Filtra i punti 3D che si muovono troppo velocemente (rumore).
+    Assumendo 25 fps (dt = 0.04s):
+      - Umani: max 11 m/s (sprint elite) -> ~0.45 m/frame
+      - Palla: max 30 m/s (passaggio forte) -> ~1.2 m/frame
+    """
+    # Riorganizza per classe per analizzare le traiettorie
+    # class_id -> list of (frame_idx, point, original_list_index)
+    trajectories = {}
+    
+    for i, (fi, res) in enumerate(zip(idxs, results_per_frame)):
+        for cls_id, point in res.items():
+            if cls_id not in trajectories:
+                trajectories[cls_id] = []
+            trajectories[cls_id].append((fi, point, i))
+            
+    points_removed = 0
+    
+    for cls_id, points in trajectories.items():
+        # Ordina per frame
+        points.sort(key=lambda x: x[0])
+        
+        # Soglie più strette
+        threshold = 1.2 if cls_id == 0 else 0.5
+        
+        if not points:
+            continue
+            
+        # Strategia: Manteniamo una finestra di punti validi
+        # Se il punto corrente è troppo lontano dall'ultimo valido, lo scartiamo.
+        # MA: Se scartiamo troppi punti consecutivi, forse era l'ultimo valido ad essere sbagliato?
+        # Per semplicità, qui implementiamo il filtro forward semplice.
+        
+        last_valid_frame = points[0][0]
+        last_valid_point = points[0][1]
+        
+        for k in range(1, len(points)):
+            curr_frame, curr_point, list_idx = points[k]
+            
+            dt = curr_frame - last_valid_frame
+            if dt <= 0: continue
+            
+            dist = np.linalg.norm(curr_point - last_valid_point)
+            max_dist = threshold * dt
+            
+            # Se il gap temporale è enorme (es. > 2 secondi = 50 frame), 
+            # accettiamo la nuova posizione come "nuovo inizio" per evitare di perdere traccia
+            # se il giocatore ha attraversato il campo mentre non era visibile.
+            if dt > 50:
+                max_dist = float('inf')
+
+            if dist <= max_dist:
+                # Movimento valido
+                last_valid_frame = curr_frame
+                last_valid_point = curr_point
+            else:
+                # Movimento impossibile -> Rimuovi
+                if cls_id in results_per_frame[list_idx]:
+                    del results_per_frame[list_idx][cls_id]
+                    points_removed += 1
+                    
+    print(f"[PIPELINE] Filtrati {points_removed} punti 3D per movimenti impossibili (soglie: Umani=0.5m/f, Palla=1.2m/f).")
+    return results_per_frame
+
+
 def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_gap: int, anchor: str, min_cams: int,
 				 do_track2d: bool = False, track_iou: float = 0.3, track_max_age: int = 15, tracks_out_dir: str = 'runs/tracks', save_tracks: bool = False,
-				 rectify: bool = False, infer_videos: bool = False, video_dir: str = 'dataset/video', model_path: str = 'weights/fine_tuned_yolo_final.pt', device: str = 'auto',
-				 evaluate_labels: bool = False, eval_gt_dir: str = 'action/labels', eval_out_dir: str = 'runs/eval'):
+				 rectify: bool = False, infer_videos: bool = False, video_dir: str = 'dataset/video', infer_images_dir: str | None = None, model_path: str = 'weights/fine_tuned_yolo_final.pt', device: str = 'auto',
+				 conf_thres: float = 0.25, imgsz: int = 1920, evaluate_labels: bool = False, eval_gt_dir: str = 'dataset/val/labels', eval_out_dir: str = 'runs/eval'):
 	"""
 	Esegue la pipeline completa di ricostruzione 3D multi-camera.
 	
@@ -254,7 +322,7 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 		device: Device per inferenza ('auto', 'cpu', '0', ecc.)
 		
 		evaluate_labels: Se True, valuta IOU RAW e INTERP contro GT
-		eval_gt_dir: Directory GT per valutazione (default 'action/labels')
+		eval_gt_dir: Directory GT per valutazione (default 'dataset/val/labels')
 		eval_out_dir: Directory output metriche (default 'runs/eval')
 	
 	Flusso esecuzione:
@@ -280,12 +348,33 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 		- [Opzionale] runs/eval/eval_cam{cam}_interp.json: Metriche post-interpolazione
 	"""
 	
+	# Smart default for eval_gt_dir if inferring on images
+	if infer_images_dir and evaluate_labels and eval_gt_dir == 'dataset/val/labels':
+		# Check if sibling 'labels' dir exists
+		candidate_gt = Path(infer_images_dir).parent / 'labels'
+		if candidate_gt.exists():
+			print(f"[PIPELINE] Auto-detected GT dir: {candidate_gt} (overriding default dataset/val/labels)")
+			eval_gt_dir = str(candidate_gt)
+
 	# ========================================
 	# 0) STEP OPZIONALE: INFERENZA VIDEO
 	# ========================================
+	# Detect video resolution for normalization (default 4K)
+	vid_w, vid_h = 3840, 2160
+	video_base = Path(video_dir)
+	for cam in cameras:
+		vp = video_base / f"out{cam}.mp4"
+		if vp.exists():
+			cap = cv2.VideoCapture(str(vp))
+			if cap.isOpened():
+				vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+				vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+				cap.release()
+				print(f"[PIPELINE] Detected video resolution: {vid_w}x{vid_h}")
+				break
+
 	if infer_videos:
 		# Esegue YOLO su video per generare labels JSON per camera
-		video_base = Path(video_dir)
 		labels_base = Path(labels_dir)
 		detected_cams = []
 		
@@ -297,7 +386,7 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 				continue
 			
 			# Inferenza YOLO frame-by-frame → salva labels_out{cam}.json
-			cam_num = run_video_inference(video_path, model_path, labels_base, device=device)
+			cam_num = run_video_inference(video_path, model_path, labels_base, device=device, conf_thres=conf_thres, imgsz=imgsz)
 			if cam_num is not None:
 				detected_cams.append(cam_num)
 		
@@ -305,6 +394,29 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 			print(f"[PIPELINE] Inferenza completata per camere: {detected_cams}")
 		else:
 			print("[PIPELINE] WARN: Nessun video processato.")
+	elif infer_images_dir:
+		# Esegue YOLO su directory di immagini
+		print(f"[PIPELINE] Running inference on images in: {infer_images_dir}")
+		labels_base = Path(labels_dir)
+		detected_cams = run_images_inference(Path(infer_images_dir), model_path, labels_base, device=device, conf_thres=conf_thres)
+		if detected_cams:
+			print(f"[PIPELINE] Inferenza immagini completata per camere: {detected_cams}")
+			
+			# Try to detect resolution from first image if video resolution was not detected
+			if vid_w == 3840 and vid_h == 2160: # Default values
+				try:
+					# Find a sample image
+					img_dir = Path(infer_images_dir)
+					sample_img = next(img_dir.glob("*.jpg"), None) or next(img_dir.glob("*.png"), None)
+					if sample_img:
+						img = cv2.imread(str(sample_img))
+						if img is not None:
+							vid_h, vid_w = img.shape[:2]
+							print(f"[PIPELINE] Detected image resolution: {vid_w}x{vid_h}")
+				except Exception as e:
+					print(f"[PIPELINE] WARN: Could not detect image resolution: {e}")
+		else:
+			print("[PIPELINE] WARN: Nessuna immagine processata.")
 	
 	# ========================================
 	# 1) CARICAMENTO LABELS E PROCESSING PER-CAMERA
@@ -346,13 +458,34 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 			# Salva JSON tracce su disco solo se richiesto e non esiste già
 			if save_tracks:
 				out_tracks = Path(tracks_out_dir) / f"labels_out{cam}.json"
-				if out_tracks.exists():
-					print(f"[TRACK-2D] File tracce già presente, non riscrivo: {out_tracks}")
-				else:
-					save_tracks_json(tracks, out_tracks, camera_id=cam)
+				# Sovrascrivi sempre per debugging
+				save_tracks_json(tracks, out_tracks, camera_id=cam)
+				
+				# Genera video tracking
+				try:
+					from tracking_2d import save_tracked_video_from_images, save_tracked_video_from_video
+					out_vid = Path(tracks_out_dir) / f"tracking_out{cam}.mp4"
+					
+					# Caso 1: Abbiamo una directory di immagini (es. dataset/val/images)
+					if infer_images_dir:
+						save_tracked_video_from_images(tracks, Path(infer_images_dir), out_vid, camera_id=cam)
+					
+					# Caso 2: Abbiamo un video sorgente (es. dataset/video/out13.mp4)
+					elif video_dir:
+						vid_path = Path(video_dir) / f"out{cam}.mp4"
+						if vid_path.exists():
+							save_tracked_video_from_video(tracks, vid_path, out_vid)
+						else:
+							print(f"[PIPELINE] Video sorgente non trovato per cam {cam}: {vid_path}")
+							
+				except ImportError:
+					print("[PIPELINE] WARN: Funzioni video tracking non trovate in tracking_2d")
+				except Exception as e:
+					print(f"[PIPELINE] WARN: Errore generazione video tracking: {e}")
 		
 		# --- 1c) OPZIONALE: Valutazione RAW contro GT ---
 		# Calcola IOU medio tra detections inferite e ground truth
+		gt_map = None
 		if evaluate_labels:
 			try:
 				from evaluation import load_labels_dir_map, frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
@@ -363,14 +496,98 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 				if gt_dir.exists():
 					# Carica GT filtrando per questa camera
 					gt_map = load_labels_dir_map(gt_dir, camera_id=cam)
+					
+					# Se stiamo facendo inferenza su video completi, dobbiamo rimappare le chiavi GT
+					# GT frame 1 -> Video frame 3 (User observed GT was 1 frame ahead)
+					# GT frame k -> Video frame 3 + (k-1)*5
+					if infer_videos and gt_map:
+						print(f"[PIPELINE] Remapping GT frames for video alignment (offset 3, stride 5)")
+						new_gt_map = {}
+						for k, v in gt_map.items():
+							new_k = 3 + (k - 1) * 5
+							new_gt_map[new_k] = v
+						gt_map = new_gt_map
+
 					# Converte struttura interna in formato valutazione
 					raw_map = frames_from_perframe(frames)
+					
+					# Normalizza coordinate se necessario (pixel -> [0,1])
+					# Assumiamo che se x > 1 siano pixel
+					needs_norm = False
+					for fi in raw_map:
+						if raw_map[fi]:
+							if raw_map[fi][0][1] > 1.0: # check x coordinate
+								needs_norm = True
+							break
+					
+					if needs_norm and vid_w > 0 and vid_h > 0:
+						for fi in raw_map:
+							norm_list = []
+							for item in raw_map[fi]:
+								cls, x, y, bw, bh = item
+								norm_list.append((cls, x/vid_w, y/vid_h, bw/vid_w, bh/vid_h))
+							raw_map[fi] = norm_list
+
 					# Calcola metriche IOU
 					m_raw = compute_iou_metrics_from_predictions(raw_map, gt_map)
+					
+					# --- TEMPORARY DEBUG VISUALIZATION ---
+					if infer_videos and video_dir:
+						print(f"[DEBUG] Generating alignment visualization for Cam {cam}...")
+						debug_dir = Path("runs/debug_alignment") / f"cam{cam}"
+						debug_dir.mkdir(parents=True, exist_ok=True)
+						
+						vid_path = Path(video_dir) / f"out{cam}.mp4"
+						cap = cv2.VideoCapture(str(vid_path))
+						
+						# Get common frames
+						common_frames = sorted(list(set(gt_map.keys()) & set(raw_map.keys())))
+						
+						# Save first 10 common frames
+						for fi in common_frames[:10]: 
+							# fi is 1-based index from tracking_2d.py
+							# cv2 uses 0-based index
+							cap.set(cv2.CAP_PROP_POS_FRAMES, fi - 1)
+							ret, frame = cap.read()
+							if not ret:
+								continue
+								
+							# Draw GT (Green)
+							if fi in gt_map:
+								for item in gt_map[fi]:
+									cls, x, y, w, h = item
+									h_img, w_img = frame.shape[:2]
+									x1 = int((x - w/2) * w_img)
+									y1 = int((y - h/2) * h_img)
+									x2 = int((x + w/2) * w_img)
+									y2 = int((y + h/2) * h_img)
+									cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+									cv2.putText(frame, f"GT {cls}", (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+							# Draw Pred (Red)
+							if fi in raw_map:
+								for item in raw_map[fi]:
+									cls, x, y, w, h = item
+									h_img, w_img = frame.shape[:2]
+									x1 = int((x - w/2) * w_img)
+									y1 = int((y - h/2) * h_img)
+									x2 = int((x + w/2) * w_img)
+									y2 = int((y + h/2) * h_img)
+									cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+									cv2.putText(frame, f"Pred {cls}", (x1, y2+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+							
+							cv2.imwrite(str(debug_dir / f"frame_{fi}.jpg"), frame)
+						cap.release()
+						print(f"[DEBUG] Saved alignment images to {debug_dir}")
+					# -------------------------------------
+
 					# Salva JSON metriche
 					out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
 					save_eval_json(m_raw, out_dir_eval / f"eval_cam{cam}_raw.json")
 					print(f"[PIPELINE][EVAL] Cam {cam} RAW mean IOU: {m_raw['mean_iou']:.3f} ({m_raw['frames_evaluated']} frames)")
+					for cls_id, stats in m_raw['per_class'].items():
+						if stats['mean_iou'] is not None:
+							print(f"    - Class {cls_id}: {stats['mean_iou']:.3f} ({stats['count']} boxes)")
 				else:
 					print(f"[PIPELINE] WARN: GT non trovata in {gt_dir}, skip valutazione RAW")
 		
@@ -381,22 +598,37 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 			
 			# --- 1e) OPZIONALE: Valutazione INTERP contro GT ---
 			# Ricalcola IOU dopo interpolazione per misurare impatto
-			if evaluate_labels:
+			if evaluate_labels and gt_map:
 				try:
-					from evaluation import frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json, load_labels_dir_map
+					from evaluation import frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
+					
+					inter_map = frames_from_perframe(frames)
+					
+					# Normalizza coordinate se necessario
+					needs_norm = False
+					for fi in inter_map:
+						if inter_map[fi]:
+							if inter_map[fi][0][1] > 1.0:
+								needs_norm = True
+							break
+					
+					if needs_norm and vid_w > 0 and vid_h > 0:
+						for fi in inter_map:
+							norm_list = []
+							for item in inter_map[fi]:
+								cls, x, y, bw, bh = item
+								norm_list.append((cls, x/vid_w, y/vid_h, bw/vid_w, bh/vid_h))
+							inter_map[fi] = norm_list
+
+					m_int = compute_iou_metrics_from_predictions(inter_map, gt_map)
+					out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
+					save_eval_json(m_int, out_dir_eval / f"eval_cam{cam}_interp.json")
+					print(f"[PIPELINE][EVAL] Cam {cam} INTERP mean IOU: {m_int['mean_iou']:.3f} ({m_int['frames_evaluated']} frames)")
+					for cls_id, stats in m_int['per_class'].items():
+						if stats['mean_iou'] is not None:
+							print(f"    - Class {cls_id}: {stats['mean_iou']:.3f} ({stats['count']} boxes)")
 				except Exception as e:
-					print(f"[PIPELINE] WARN: impossibile importare funzioni di valutazione: {e}")
-				else:
-					gt_dir = Path(eval_gt_dir)
-					if gt_dir.exists():
-						gt_map = load_labels_dir_map(gt_dir, camera_id=cam)
-						inter_map = frames_from_perframe(frames)
-						m_int = compute_iou_metrics_from_predictions(inter_map, gt_map)
-						out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
-						save_eval_json(m_int, out_dir_eval / f"eval_cam{cam}_interp.json")
-						print(f"[PIPELINE][EVAL] Cam {cam} INTERP mean IOU: {m_int['mean_iou']:.3f} ({m_int['frames_evaluated']} frames)")
-					else:
-						print(f"[PIPELINE] WARN: GT non trovata in {gt_dir}, skip valutazione INTERP")
+					print(f"[PIPELINE] WARN: Errore valutazione INTERP: {e}")
 		
 		# Salva frames processati per questa camera
 		per_cam_frames[cam] = frames
@@ -447,6 +679,12 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 	results_per_frame = tri.triangulate_frames_list(frames_by_class, idxs, calibs, anchor=anchor, scale=0.001, min_cams=min_cams)
 
 	# ========================================
+	# 5b) FILTRAGGIO MOVIMENTI IMPOSSIBILI
+	# ========================================
+	# Rimuove punti che si spostano troppo velocemente (rumore)
+	results_per_frame = filter_3d_movements(results_per_frame, idxs)
+
+	# ========================================
 	# 6) SALVATAGGIO RISULTATI
 	# ========================================
 	out_dir = Path("runs") / "triangulation"
@@ -477,93 +715,24 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 	# Nota: valutazione già eseguita per-camera durante il loop (step 1c e 1e)
 
 
-def parse_args():
-	"""
-	Parser argomenti command-line per configurare la pipeline.
-	
-	Returns:
-		args: Namespace con tutti i parametri configurati
-	
-	Gruppi opzioni:
-		- Base: cameras, labels-dir, interpolate, anchor, min-cams, visualize
-		- Tracking 2D: track2d, track-iou, track-max-age, tracks-out-dir, save-tracks
-		- Rettificazione: rectify
-		- Inferenza video: infer-videos, video-dir, model, device
-		- Valutazione: evaluate-labels, eval-gt-dir, eval-out-dir
-	"""
-	p = argparse.ArgumentParser(description="Pipeline unificata per ricostruzione 3D multi-camera")
-	
-	# --- Opzioni base ---
-	p.add_argument('--cameras', type=int, nargs='+', default=[2,4,13], 
-				   help='Lista ID camere da processare (default: 2 4 13)')
-	p.add_argument('--labels-dir', type=str, default='dataset/infer_video', 
-				   help='Directory base con labels per camera (JSON o txt)')
-	p.add_argument('--interpolate', action='store_true', 
-				   help='Interpola detections mancanti tra frame')
-	p.add_argument('--max-gap', type=int, default=10, 
-				   help='Numero massimo frame da interpolare (default: 10)')
-	p.add_argument('--anchor', type=str, default='center', choices=['center','bottom_center'], 
-				   help='Punto bbox per triangolazione: center o bottom_center')
-	p.add_argument('--min-cams', type=int, default=2, 
-				   help='Minimo camere richieste per triangolare (default: 2)')
-	p.add_argument('--visualize', action='store_true', 
-				   help='Avvia visualizzatore 3D interattivo al termine')
-	
-	# --- Opzioni tracking 2D ---
-	p.add_argument('--track2d', action='store_true', 
-				   help='Esegui tracking 2D IoU-based (DISATTIVATO di default)')
-	p.add_argument('--track-iou', type=float, default=0.3, 
-				   help='Soglia IoU per matching tracce (default: 0.3)')
-	p.add_argument('--track-max-age', type=int, default=15, 
-				   help='Frame massimi senza match prima di chiudere traccia (default: 15)')
-	p.add_argument('--tracks-out-dir', type=str, default='runs/tracks', 
-				   help='Directory output JSON tracce 2D (default: runs/tracks)')
-	p.add_argument('--save-tracks', action='store_true', 
-				   help='Salva JSON tracce su disco (una volta, skip se esiste)')
-	
-	# --- Opzione rettificazione ---
-	p.add_argument('--rectify', action='store_true', 
-				   help='Corregge distorsioni ottiche prima di triangolare')
-	
-	# --- Opzioni inferenza video ---
-	p.add_argument('--infer-videos', action='store_true', 
-				   help='Esegui inferenza YOLO su video prima di tutto')
-	p.add_argument('--video-dir', type=str, default='dataset/video', 
-				   help='Directory con video input out{cam}.mp4 (default: dataset/video)')
-	p.add_argument('--model', type=str, default='weights/fine_tuned_yolo_final.pt', 
-				   help='Path modello YOLO fine-tuned (default: weights/fine_tuned_yolo_final.pt)')
-	p.add_argument('--device', type=str, default='auto', 
-				   help='Device inferenza: auto, cpu, 0, 0,1 (default: auto)')
-	
-	# --- Opzioni valutazione ---
-	p.add_argument('--evaluate-labels', action='store_true', 
-				   help='Valuta IOU RAW e INTERP contro ground truth')
-	p.add_argument('--eval-gt-dir', type=str, default='action/labels', 
-				   help='Directory GT con file out{cam}_frame_{num}*.txt (default: action/labels)')
-	p.add_argument('--eval-out-dir', type=str, default='runs/eval', 
-				   help='Directory output metriche JSON (default: runs/eval)')
-	
-	return p.parse_args()
-
-
 def main():
 	"""
 	Entry point principale: parse argomenti, esegue pipeline, visualizza risultati.
 	
 	Flusso:
-		1. Parse argomenti da command-line
+		1. Parse argomenti da command-line (usa config.get_args())
 		2. Esegue run_pipeline con parametri configurati
 		3. Se richiesto (--visualize), avvia visualizzatore 3D interattivo
 	"""
-	args = parse_args()
+	args = get_args()
 	
 	# Esegue pipeline completa
 	run_pipeline(
 		args.cameras, args.labels_dir, args.interpolate, args.max_gap, args.anchor, args.min_cams,
 		do_track2d=args.track2d, track_iou=args.track_iou, track_max_age=args.track_max_age, 
 		tracks_out_dir=args.tracks_out_dir, save_tracks=args.save_tracks,
-		rectify=args.rectify, infer_videos=args.infer_videos, video_dir=args.video_dir, 
-		model_path=args.model, device=args.device,
+		rectify=args.rectify, infer_videos=args.infer_videos, video_dir=args.video_dir, infer_images_dir=args.infer_images_dir,
+		model_path=args.model, device=args.device, conf_thres=args.conf_thres, imgsz=args.imgsz,
 		evaluate_labels=args.evaluate_labels, eval_gt_dir=args.eval_gt_dir, eval_out_dir=args.eval_out_dir
 	)
 	
@@ -581,6 +750,12 @@ if __name__ == '__main__':
 # ----------------------------------------
 # FLUSSO COMPLETO: Inferenza video -> Interpolazione -> Rettificazione -> Triangolazione -> Valutazione -> Visualizzazione:
 #   python pipeline.py --infer-videos --interpolate --rectify --evaluate-labels --visualize --device 0
+#
+# Con modello custom e confidence threshold per catturare più Ball detection (sensibilità maggiore):
+#   python pipeline.py --infer-videos --model weights/fine_tuned_yolo2k.pt --conf-thres 0.15 --interpolate --rectify --evaluate-labels --device 0
+#
+# Con confidence threshold alta per ridurre falsi positivi:
+#   python pipeline.py --infer-videos --conf-thres 0.4 --interpolate --rectify --evaluate-labels --device 0
 #
 # Con tracking 2D (opzionale, disattivato di default):
 #   python pipeline.py --infer-videos --track2d --save-tracks --interpolate --rectify --evaluate-labels --visualize --device 0
