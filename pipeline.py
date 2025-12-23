@@ -584,10 +584,19 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 					# Salva JSON metriche
 					out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
 					save_eval_json(m_raw, out_dir_eval / f"eval_cam{cam}_raw.json")
-					print(f"[PIPELINE][EVAL] Cam {cam} RAW mean IOU: {m_raw['mean_iou']:.3f} ({m_raw['frames_evaluated']} frames)")
-					for cls_id, stats in m_raw['per_class'].items():
-						if stats['mean_iou'] is not None:
-							print(f"    - Class {cls_id}: {stats['mean_iou']:.3f} ({stats['count']} boxes)")
+					print(f"[PIPELINE][EVAL] Cam {cam} RAW:")
+					print(f"    Mean IOU (Matching): {m_raw['mean_iou']:.3f} ({m_raw['frames_evaluated']} frames)")
+					print(f"    Mean IOU (GT):       {m_raw['mean_iou_gt']:.3f} ({m_raw['frames_evaluated_gt']} GT frames)")
+					print(f"    Per-class IOU:")
+					print(f"        Class | Matching (IoU, N) | GT (IoU, N)")
+					for cls_id in sorted(m_raw['per_class'].keys()):
+						stats_m = m_raw['per_class'][cls_id]
+						stats_gt = m_raw['per_class_gt'][cls_id]
+						iou_m = f"{stats_m['mean_iou']:.3f}" if stats_m['mean_iou'] is not None else "N/A"
+						n_m = stats_m['count']
+						iou_gt = f"{stats_gt['mean_iou']:.3f}" if stats_gt['mean_iou'] is not None else "N/A"
+						n_gt = stats_gt['count']
+						print(f"        {cls_id:5d} | {iou_m:>8} ({n_m:3d}) | {iou_gt:>8} ({n_gt:3d})")
 				else:
 					print(f"[PIPELINE] WARN: GT non trovata in {gt_dir}, skip valutazione RAW")
 		
@@ -623,10 +632,19 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 					m_int = compute_iou_metrics_from_predictions(inter_map, gt_map)
 					out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
 					save_eval_json(m_int, out_dir_eval / f"eval_cam{cam}_interp.json")
-					print(f"[PIPELINE][EVAL] Cam {cam} INTERP mean IOU: {m_int['mean_iou']:.3f} ({m_int['frames_evaluated']} frames)")
-					for cls_id, stats in m_int['per_class'].items():
-						if stats['mean_iou'] is not None:
-							print(f"    - Class {cls_id}: {stats['mean_iou']:.3f} ({stats['count']} boxes)")
+					print(f"[PIPELINE][EVAL] Cam {cam} INTERP:")
+					print(f"    Mean IOU (Matching): {m_int['mean_iou']:.3f} ({m_int['frames_evaluated']} frames)")
+					print(f"    Mean IOU (GT):       {m_int['mean_iou_gt']:.3f} ({m_int['frames_evaluated_gt']} GT frames)")
+					print(f"    Per-class IOU:")
+					print(f"        Class | Matching (IoU, N) | GT (IoU, N)")
+					for cls_id in sorted(m_int['per_class'].keys()):
+						stats_m = m_int['per_class'][cls_id]
+						stats_gt = m_int['per_class_gt'][cls_id]
+						iou_m = f"{stats_m['mean_iou']:.3f}" if stats_m['mean_iou'] is not None else "N/A"
+						n_m = stats_m['count']
+						iou_gt = f"{stats_gt['mean_iou']:.3f}" if stats_gt['mean_iou'] is not None else "N/A"
+						n_gt = stats_gt['count']
+						print(f"        {cls_id:5d} | {iou_m:>8} ({n_m:3d}) | {iou_gt:>8} ({n_gt:3d})")
 				except Exception as e:
 					print(f"[PIPELINE] WARN: Errore valutazione INTERP: {e}")
 		

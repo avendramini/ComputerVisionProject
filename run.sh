@@ -9,7 +9,7 @@
 CAMERAS="2 4 13"                # ID delle camere da processare (separate da spazio)
 LABELS_DIR="dataset/infer_video" # Directory dove leggere/salvare le labels
 INTERPOLATE=true                # true: attiva interpolazione, false: disattiva (--no-interpolate)
-MAX_GAP=10                      # Numero massimo di frame da interpolare
+MAX_GAP=2                  # Numero massimo di frame da interpolare
 ANCHOR="center"                 # 'center' o 'bottom_center'
 MIN_CAMS=2                      # Minimo numero di camere per triangolare un punto
 VISUALIZE=true                  # true: apre il visualizzatore 3D alla fine
@@ -20,15 +20,15 @@ VIDEO_DIR="dataset/video"       # Directory contenente i video (outX.mp4)
 INFER_IMAGES_DIR=""             # Se specificato, esegue inferenza su questa cartella di immagini invece che sui video
 MODEL="weights/best.pt" # Path del modello YOLO (.pt)
 DEVICE="0"                      # Device: 'cpu', '0', '0,1', 'auto'
-CONF_THRES=0.25                 # Soglia confidenza detection
-IMGSZ=1920                    # Dimensione input inferenza (es. 1920, 1280)
+CONF_THRES=0.3                 # Soglia confidenza detection
+IMGSZ=1920               # Dimensione input inferenza (es. 1920, 1280)
 
 # --- Rettificazione ---
 RECTIFY=true                    # true: attiva correzione distorsione, false: disattiva (--no-rectify)
 
 # --- Tracking 2D (Opzionale) ---
 TRACK2D=true                   # true: abilita tracking 2D
-TRACK_IOU=0.0                   # Soglia IoU per tracking
+TRACK_IOU=0.0                  # Soglia IoU per tracking
 TRACK_MAX_AGE=15                # Max frame persi prima di chiudere traccia
 TRACKS_OUT_DIR="runs/tracks"    # Output directory tracce
 SAVE_TRACKS=true               # true: salva file JSON delle tracce

@@ -318,7 +318,7 @@ class FrameViewer3D:
         
         # Limits
         ax.set_xlim(-15, 15)
-        ax.set_ylim(0, 6)  # Reasonable height for basketball
+        ax.set_ylim(-1, 6)  # Mostra anche profondità fino a -1
         
         out_path = output_dir / f'trajectory_side_class_{cid}.png'
         fig.savefig(out_path, dpi=150)

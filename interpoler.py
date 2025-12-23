@@ -98,46 +98,30 @@ def interpolate_missing_detections(frames, max_frame, max_gap=10):
     for cls_id in sorted(all_classes):
         # Trova tutti i frame dove questa classe è presente
         frames_with_class = sorted([f for f in frames.keys() if cls_id in frames[f]])
-        
         if len(frames_with_class) < 2:
-            # print(f"[WARN] Classe {cls_id}: solo {len(frames_with_class)} detection, skip interpolazione")
             continue
-        
         interpolated_count = 0
-        
-        # Interpola tra frame consecutivi
+        # Interpola solo tra frame consecutivi con gap <= max_gap
         for i in range(len(frames_with_class) - 1):
             frame_start = frames_with_class[i]
             frame_end = frames_with_class[i + 1]
             gap = frame_end - frame_start - 1
-            
-            # Skip se gap troppo grande (oggetto probabilmente uscito/entrato)
             if gap == 0 or gap > max_gap:
                 continue
-            
-            # Prendi detection di inizio e fine
-            det_start = np.array(frames[frame_start][cls_id][:4])  # [x, y, w, h]
+            det_start = np.array(frames[frame_start][cls_id][:4])
             det_end = np.array(frames[frame_end][cls_id][:4])
             conf_start = frames[frame_start][cls_id][4]
             conf_end = frames[frame_end][cls_id][4]
-            
-            # Interpola linearmente per ogni frame nel gap
             for j in range(1, gap + 1):
                 frame_idx = frame_start + j
-                alpha = j / (gap + 1)  # peso interpolazione [0,1]
-                
-                # Interpolazione lineare
+                alpha = j / (gap + 1)
                 det_interp = (1 - alpha) * det_start + alpha * det_end
                 conf_interp = (1 - alpha) * conf_start + alpha * conf_end
-                
-                # Aggiungi detection interpolata
                 interpolated[frame_idx][cls_id] = [
                     det_interp[0], det_interp[1], det_interp[2], det_interp[3], conf_interp
                 ]
                 interpolated_count += 1
-        
         total_interpolated += interpolated_count
-        # print(f"[INFO] Classe {cls_id}: {interpolated_count} detection interpolate")
     
     print(f"[INFO] Interpolated {total_interpolated} detections for this camera.")
     return interpolated

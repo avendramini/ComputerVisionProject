@@ -453,9 +453,12 @@ def compute_iou_metrics_from_predictions(pred_frames: dict[int, list[tuple[int, 
         print(f"Mean IOU: {metrics['mean_iou']:.3f}")  # 0.823
         print(f"Frames: {metrics['frames_evaluated']}")  # 2
     """
-    # Trova frame comuni tra pred e GT
-    frames = sorted(set(pred_frames.keys()) & set(gt_frames.keys()))
-    
+    # Trova frame comuni tra pred e GT (matching)
+    frames_matching = sorted(set(pred_frames.keys()) & set(gt_frames.keys()))
+
+    # Trova tutti i frame GT (per valutazione su tutti i GT)
+    frames_gt = sorted(gt_frames.keys())
+
     # Auto-detect numero classi se non specificato
     if num_classes is None:
         max_cls = -1
@@ -464,40 +467,47 @@ def compute_iou_metrics_from_predictions(pred_frames: dict[int, list[tuple[int, 
                 for it in lst:
                     max_cls = max(max_cls, int(it[0]))
         num_classes = max(0, max_cls + 1)
-    
-    # Accumula IOU per classe
+
+    # --- METRICA STANDARD: solo frame matching ---
     all_iou_per_class = {c: [] for c in range(num_classes)}
     per_frame = []
-    
-    # Per ogni frame comune
-    for fi in frames:
+    for fi in frames_matching:
         pred = pred_frames.get(fi, [])
         gt = gt_frames.get(fi, [])
-        
-        # Calcola IOU per classe con greedy matching
         iou_pc = per_class_iou(gt, pred, num_classes=num_classes)
-        
-        # Accumula risultati
         for c, ious in iou_pc.items():
             all_iou_per_class[c].extend(ious)
-        
-        # Media IOU per questo frame
         avg_iou = float(np.mean([v for lst in iou_pc.values() for v in lst])) if any(iou_pc.values()) else 0.0
         per_frame.append({"frame": int(fi), "average_iou": avg_iou})
-    
-    # Statistiche per classe
     per_class = {c: {"mean_iou": float(np.mean(v)) if v else None, "count": int(len(v))} for c, v in all_iou_per_class.items()}
-    
-    # Media globale (per box)
     all_ious = [iou for ious in all_iou_per_class.values() for iou in ious]
     mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
-    
+
+    # --- NUOVA METRICA: su tutti i frame GT (assegna IoU=0 se manca la predizione) ---
+    all_iou_per_class_gt = {c: [] for c in range(num_classes)}
+    per_frame_gt = []
+    for fi in frames_gt:
+        pred = pred_frames.get(fi, [])  # se manca, lista vuota
+        gt = gt_frames.get(fi, [])
+        iou_pc = per_class_iou(gt, pred, num_classes=num_classes)
+        for c, ious in iou_pc.items():
+            all_iou_per_class_gt[c].extend(ious)
+        avg_iou = float(np.mean([v for lst in iou_pc.values() for v in lst])) if any(iou_pc.values()) else 0.0
+        per_frame_gt.append({"frame": int(fi), "average_iou": avg_iou})
+    per_class_gt = {c: {"mean_iou": float(np.mean(v)) if v else None, "count": int(len(v))} for c, v in all_iou_per_class_gt.items()}
+    all_ious_gt = [iou for ious in all_iou_per_class_gt.values() for iou in ious]
+    mean_iou_gt = float(np.mean(all_ious_gt)) if all_ious_gt else 0.0
+
     return {
         "mode": "labels-vs-labels",
-        "frames_evaluated": len(frames),
+        "frames_evaluated": len(frames_matching),
         "per_frame": per_frame,
         "per_class": per_class,
         "mean_iou": mean_iou,
+        "frames_evaluated_gt": len(frames_gt),
+        "per_frame_gt": per_frame_gt,
+        "per_class_gt": per_class_gt,
+        "mean_iou_gt": mean_iou_gt,
         "num_classes": num_classes,
     }
 
