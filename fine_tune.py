@@ -59,6 +59,7 @@ def fine_tune_yolo(model_size='yolov8n.pt', dataset_yaml='dataset.yaml', epochs=
         patience=50,
         batch=2,
         device=0  # Use GPU if available
+        ,cls=1.5
     )
     
     return model, results
@@ -94,13 +95,13 @@ if __name__ == "__main__":
     
     # Fine-tune the model
     model, results = fine_tune_yolo(
-        model_size='yolov8n.pt',  # Options: yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
+        model_size='yolo12n.pt',  # Options: yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
         dataset_yaml=dataset_yaml,
         epochs=100,
-        imgsz=3840
+        imgsz=1920
     )
     
     # Save the trained model
-    model.save('last_run3840.pt')
+    model.save('last_runv81920.pt')
     
     print("Fine-tuning completed!")
