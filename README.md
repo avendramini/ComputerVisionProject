@@ -28,22 +28,84 @@ This project allows you to:
 	# or install manually: ultralytics opencv-python numpy matplotlib pyyaml torch
 	```
 
-## Main Folder Structure
-- `dataset/` : images, YOLO labels, videos, split into train/val/test
-- `camparams/` : camera calibration files
+## Folder Structure
+
+```
+config.py
+dataset.yaml
+evaluation.py
+fine_tune.py
+interpoler.py
+pipeline.py
+README.md
+rectified_videos.py
+run.sh
+tracking_2d.py
+triangulation_3d.py
+visualizer_3d.py
+yolo11n.pt
+yolo12n.pt
+yolov8n.pt
+yolov8s.pt
+__pycache__/
+camparams/
+	out13_camera_calib.json
+	out13_img_points.json
+	...
+dataset/
+	data.yaml
+	README.dataset.txt
+	boh/
+		images/
+		labels/
+			...
+	infer_video/
+		labels_out13.json
+		...
+	test/
+		images/
+		labels/
+			...
+	train/
+		images/
+		labels/
+			...
+	val/
+		images/
+		labels/
+			...
+	video/
+runs/
+	debug_alignment/
+	detect/
+	eval/
+	tracks/
+	trajectories/
+	triangulation/
+		points.csv
+		points.json
+weights/
+	best.pt
+	fine_tuned_yolo_final.pt
+	...
+```
+
+- `dataset/` : images, YOLO labels, videos, split into train/val/test, and subfolders for inference and video
+- `camparams/` : camera calibration files (JSON)
 - `weights/` : pre-trained and fine-tuned YOLO models
-- `runs/` : inference, tracking, triangulation, evaluation results
+- `runs/` : results for inference, triangulation, evaluation, and more
+- Main scripts: `pipeline.py`, `triangulation_3d.py`, `evaluation.py`, `visualizer_3d.py`, etc.
 
 ## Main Pipeline
-The complete pipeline is managed by `pipeline.py` and can be configured via `run.sh` or CLI.
+The complete pipeline is managed by `pipeline.py` and can be configured via `run.sh` or command line arguments.
 
 ### Typical Flow:
 1. YOLO inference on multi-camera videos (`--infer-videos`)
-2. 2D tracking and interpolation (optional)
-3. Optical distortion rectification (optional)
+2. Detection interpolation (optional, `--interpolate`)
+3. Optical distortion rectification (optional, `--rectify`)
 4. Multi-camera 3D triangulation
-5. Evaluation against ground truth (optional)
-6. Interactive 3D visualization (optional)
+5. Evaluation against ground truth (optional, `--evaluate-labels`)
+6. Interactive 3D visualization (optional, `--visualize`)
 
 ## How to Run the Pipeline
 
@@ -65,7 +127,7 @@ python pipeline.py --infer-videos --interpolate --rectify --evaluate-labels --vi
 - `--model weights/fine_tuned_yolo_final.pt` : YOLO model to use
 - `--device 0` : GPU/CPU
 
-For all options see `config.py` or the help of `pipeline.py`.
+For all options see `config.py` or run `python pipeline.py --help`.
 
 ## Custom YOLO Training
 To train/fine-tune YOLO on a custom dataset:
@@ -101,6 +163,7 @@ The expected structure is in `dataset/`:
 ## Credits
 Developed by [your name/team].
 Based on Ultralytics YOLOv8.
+All code and documentation are provided in English for clarity and collaboration.
 
 ## License
 MIT License

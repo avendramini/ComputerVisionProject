@@ -1,18 +1,18 @@
 """
-Configurazione centralizzata per la pipeline di ricostruzione 3D multi-camera.
+Centralized configuration for multi-camera 3D reconstruction pipeline.
 
-Questo modulo gestisce tutti i parametri configurabili del progetto in un unico posto.
-Tutti gli altri moduli importano da qui per accedere alla configurazione.
+This module manages all configurable parameters of the project in one place.
+All other modules import from here to access the configuration.
 
 Usage:
     from config import get_args, PipelineConfig
     
-    # In script principale
+    # In main script
     args = get_args()
     config = PipelineConfig.from_args(args)
     
-    # In altri moduli
-    config = PipelineConfig.from_args(args)  # passa args ricevuto
+    # In other modules
+    config = PipelineConfig.from_args(args)  # pass received args
 """
 from __future__ import annotations
 import argparse
@@ -24,40 +24,38 @@ from typing import List
 @dataclass
 class PipelineConfig:
 	"""
-	Configurazione immutabile per la pipeline di ricostruzione 3D.
+	Immutable configuration for multi-camera 3D reconstruction pipeline.
 	
 	Attributes:
 		--- Base ---
-		cameras: Lista ID camere da processare
-		labels_dir: Directory base con labels per camera
-		interpolate: Se True, interpola detections mancanti
-		max_gap: Numero massimo frame da interpolare
-		anchor: Punto bbox per triangolazione ('center' o 'bottom_center')
-		min_cams: Minimo camere richieste per triangolare
-		visualize: Se True, avvia visualizzatore 3D al termine
+		cameras: List of camera IDs to process
+		labels_dir: Base directory with labels per camera
+		interpolate: If True, interpolate missing detections
+		max_gap: Maximum number of frames to interpolate
+		anchor: Bounding box anchor point for triangulation ('center' or 'bottom_center')
+		min_cams: Minimum cameras required for triangulation
+		visualize: If True, launch 3D viewer on completion
 		
-		--- Tracking 2D ---
-		track2d: Se True, esegue tracking 2D IoU-based
-		track_iou: Soglia IoU per matching tracce
-		track_max_age: Frame massimi senza match prima di chiudere traccia
-		tracks_out_dir: Directory output JSON tracce 2D
-		save_tracks: Se True, salva JSON tracce su disco
+		--- Labels & Video ---
+		tracks_out_dir: Output directory for JSON labels and videos
+		save_tracks: If True, save JSON labels and generate visualization video
 		
-		--- Rettificazione ---
-		rectify: Se True, corregge distorsioni ottiche
+		--- Rectification ---
+		rectify: If True, apply optical distortion correction
 		
-		--- Inferenza video ---
-		infer_videos: Se True, esegue inferenza YOLO su video
-		video_dir: Directory con video input
-		model: Path modello YOLO
-		device: Device per inferenza
-		conf_thres: Confidence threshold per YOLO predict
-		imgsz: Dimensione immagine per inferenza YOLO
+		--- Video Inference ---
+		infer_videos: If True, run YOLO inference on videos
+		video_dir: Directory containing input videos
+		infer_images_dir: Directory containing input images (optional)
+		model: Path to YOLO model file
+		device: Device for inference (cpu, auto, cuda, etc.)
+		conf_thres: Confidence threshold for YOLO predictions
+		imgsz: Input image size for YOLO inference
 		
-		--- Valutazione ---
-		evaluate_labels: Se True, valuta IOU contro GT
-		eval_gt_dir: Directory GT per valutazione
-		eval_out_dir: Directory output metriche
+		--- Evaluation ---
+		evaluate_labels: If True, evaluate IOU against ground truth
+		eval_gt_dir: Ground truth directory for evaluation
+		eval_out_dir: Output directory for metrics
 	"""
 	# --- Base ---
 	cameras: List[int]
@@ -68,17 +66,14 @@ class PipelineConfig:
 	min_cams: int
 	visualize: bool
 	
-	# --- Tracking 2D ---
-	track2d: bool
-	track_iou: float
-	track_max_age: int
+	# --- Labels & Video ---
 	tracks_out_dir: str
 	save_tracks: bool
 	
-	# --- Rettificazione ---
+	# --- Rectification ---
 	rectify: bool
 	
-	# --- Inferenza video ---
+	# --- Video Inference ---
 	infer_videos: bool
 	video_dir: str
 	infer_images_dir: str | None
@@ -87,7 +82,7 @@ class PipelineConfig:
 	conf_thres: float
 	imgsz: int
 	
-	# --- Valutazione ---
+	# --- Evaluation ---
 	evaluate_labels: bool
 	eval_gt_dir: str
 	eval_out_dir: str
@@ -95,16 +90,19 @@ class PipelineConfig:
 	@classmethod
 	def from_args(cls, args: argparse.Namespace) -> PipelineConfig:
 		"""
-		Crea configurazione da argomenti parsed.
+		Create configuration from parsed command-line arguments.
 		
 		Args:
-			args: Namespace da argparse con tutti i parametri
+			args: argparse Namespace containing all parameters
 		
 		Returns:
-			PipelineConfig istanza immutabile
+			PipelineConfig: Immutable configuration instance
+		
+		Raises:
+			ValueError: If incompatible argument combinations are detected
 		"""
 		if args.evaluate_labels and not args.infer_videos:
-			raise ValueError("Errore configurazione: Non è possibile eseguire --evaluate-labels se non viene eseguito anche --infer-videos.")
+			raise ValueError("Configuration error: Cannot run --evaluate-labels unless --infer-videos is also run.")
 
 		return cls(
 			# Base
@@ -116,26 +114,22 @@ class PipelineConfig:
 			min_cams=args.min_cams,
 			visualize=args.visualize,
 			
-			# Tracking 2D
-			track2d=args.track2d,
-			track_iou=args.track_iou,
-			track_max_age=args.track_max_age,
+			# Labels & Video
 			tracks_out_dir=args.tracks_out_dir,
 			save_tracks=args.save_tracks,
 			
-			# Rettificazione
+			# Rectification
 			rectify=args.rectify,
 			
-			# Inferenza video
+			# Video inference
 			infer_videos=args.infer_videos,
 			video_dir=args.video_dir,
 			infer_images_dir=args.infer_images_dir,
 			model=args.model,
 			device=args.device,
 			conf_thres=args.conf_thres,
-			imgsz=getattr(args, 'imgsz', 1920),  # fallback per compatibilità
-			
-			# Valutazione
+			imgsz=getattr(args, 'imgsz', 1920),  # fallback for compatibility
+						# Evaluation
 			evaluate_labels=args.evaluate_labels,
 			eval_gt_dir=args.eval_gt_dir,
 			eval_out_dir=args.eval_out_dir,
@@ -144,10 +138,10 @@ class PipelineConfig:
 	@classmethod
 	def default(cls) -> PipelineConfig:
 		"""
-		Crea configurazione con valori di default.
+		Create default configuration
 		
 		Returns:
-			PipelineConfig con parametri predefiniti
+			PipelineConfig with configured parameters
 		"""
 		return cls(
 			# Base
@@ -159,17 +153,14 @@ class PipelineConfig:
 			min_cams=2,
 			visualize=False,
 			
-			# Tracking 2D
-			track2d=False,
-			track_iou=0.3,
-			track_max_age=15,
+			# Labels & Video
 			tracks_out_dir='runs/tracks',
 			save_tracks=False,
 			
-			# Rettificazione
+			# Rectification
 			rectify=False,
 			
-			# Inferenza video
+			# Video inference
 			infer_videos=False,
 			video_dir='dataset/video',
 			infer_images_dir=None,
@@ -178,7 +169,7 @@ class PipelineConfig:
 			conf_thres=0.25,
 			imgsz=1920,
 			
-			# Valutazione
+			# Evaluation
 			evaluate_labels=False,
 			eval_gt_dir='dataset/val/labels',
 			eval_out_dir='runs/eval',
@@ -186,100 +177,76 @@ class PipelineConfig:
 
 
 def get_args() -> argparse.Namespace:
-	"""
-	Parser argomenti command-line centralizzato per tutta la pipeline.
+	p = argparse.ArgumentParser(description="Unified multi-camera 3D reconstruction pipeline")
 	
-	Returns:
-		args: Namespace con tutti i parametri configurati
-	
-	Gruppi opzioni:
-		- Base: cameras, labels-dir, interpolate, anchor, min-cams, visualize
-		- Tracking 2D: track2d, track-iou, track-max-age, tracks-out-dir, save-tracks
-		- Rettificazione: rectify
-		- Inferenza video: infer-videos, video-dir, model, device, conf-thres, imgsz
-		- Valutazione: evaluate-labels, eval-gt-dir, eval-out-dir
-	
-	Examples:
-		>>> args = get_args()
-		>>> config = PipelineConfig.from_args(args)
-		>>> print(config.model, config.conf_thres)
-	"""
-	p = argparse.ArgumentParser(description="Pipeline unificata per ricostruzione 3D multi-camera")
-	
-	# --- Opzioni base ---
+	# --- Base options ---
 	p.add_argument('--cameras', type=int, nargs='+', default=[2,4,13], 
-				   help='Lista ID camere da processare (default: 2 4 13)')
+				   help='List of camera IDs to process (default: 2 4 13)')
 	p.add_argument('--labels-dir', type=str, default='dataset/infer_video', 
-				   help='Directory base con labels per camera (JSON o txt)')
+				   help='Base directory with labels per camera (JSON or txt)')
 	p.add_argument('--no-interpolate', dest='interpolate', action='store_false', 
-				   help='Disabilita interpolazione detections (attiva di default)')
+				   help='Disable detection interpolation (enabled by default)')
 	# Default is True due to store_false
 	p.add_argument('--max-gap', type=int, default=10, 
-				   help='Numero massimo frame da interpolare (default: 10)')
+				   help='Maximum number of frames to interpolate (default: 10)')
 	p.add_argument('--anchor', type=str, default='center', choices=['center','bottom_center'], 
-				   help='Punto bbox per triangolazione: center o bottom_center')
+				   help='Bounding box anchor point for triangulation: center or bottom_center')
 	p.add_argument('--min-cams', type=int, default=2, 
-				   help='Minimo camere richieste per triangolare (default: 2)')
+				   help='Minimum number of cameras required for triangulation (default: 2)')
 	p.add_argument('--visualize', action='store_true', 
-				   help='Avvia visualizzatore 3D interattivo al termine')
+				   help='Launch interactive 3D visualizer upon completion')
 	
-	# --- Opzioni tracking 2D ---
-	p.add_argument('--track2d', action='store_true', 
-				   help='Esegui tracking 2D IoU-based (DISATTIVATO di default)')
-	p.add_argument('--track-iou', type=float, default=0.3, 
-				   help='Soglia IoU per matching tracce (default: 0.3)')
-	p.add_argument('--track-max-age', type=int, default=15, 
-				   help='Frame massimi senza match prima di chiudere traccia (default: 15)')
+	# --- Label and video output ---
 	p.add_argument('--tracks-out-dir', type=str, default='runs/tracks', 
-				   help='Directory output JSON tracce 2D (default: runs/tracks)')
+				   help='Output directory for JSON labels and video (default: runs/tracks)')
 	p.add_argument('--save-tracks', action='store_true', 
-				   help='Salva JSON tracce su disco (una volta, skip se esiste)')
+				   help='Save JSON labels and generate visualization video')
 	
-	# --- Opzione rettificazione ---
+	# --- Rectification option ---
 	p.add_argument('--no-rectify', dest='rectify', action='store_false', 
-				   help='Disabilita correzione distorsioni ottiche (attiva di default)')
+				   help='Disable optical distortion correction (enabled by default)')
 	
-	# --- Opzioni inferenza video ---
+	# --- Video inference options ---
 	p.add_argument('--infer-videos', action='store_true', 
-				   help='Esegui inferenza YOLO su video prima di tutto')
+				   help='Run YOLO inference on videos first')
 	p.add_argument('--video-dir', type=str, default='dataset/video', 
-				   help='Directory con video input out{cam}.mp4 (default: dataset/video)')
+				   help='Directory containing input videos out{cam}.mp4 (default: dataset/video)')
 	p.add_argument('--infer-images-dir', type=str, default=None, 
-				   help='Directory con immagini input out{cam}_frame_{num}*.jpg (default: None)')
+				   help='Directory containing input images out{cam}_frame_{num}*.jpg (default: None)')
 	p.add_argument('--model', type=str, default='weights/fine_tuned_yolo_final.pt', 
-				   help='Path modello YOLO fine-tuned (default: weights/fine_tuned_yolo_final.pt)')
+				   help='Path to fine-tuned YOLO model (default: weights/fine_tuned_yolo_final.pt)')
 	p.add_argument('--device', type=str, default='auto', 
-				   help='Device inferenza: auto, cpu, 0, 0,1 (default: auto)')
+				   help='Inference device: auto, cpu, 0, 0,1 (default: auto)')
 	p.add_argument('--conf-thres', type=float, default=0.25, 
-				   help='Confidence threshold per YOLO predict (default: 0.25)')
+				   help='Confidence threshold for YOLO predictions (default: 0.25)')
 	p.add_argument('--imgsz', type=int, default=1920, 
-				   help='Dimensione immagine per inferenza YOLO (default: 1920)')
+				   help='Image size for YOLO inference (default: 1920)')
 	
-	# --- Opzioni valutazione ---
+	# --- Evaluation options ---
 	p.add_argument('--evaluate-labels', action='store_true', 
-				   help='Valuta IOU RAW e INTERP contro ground truth')
+				   help='Evaluate RAW and INTERP IoU metrics against ground truth')
 	p.add_argument('--eval-gt-dir', type=str, default='dataset/val/labels', 
-				   help='Directory GT con file out{cam}_frame_{num}*.txt (default: dataset/val/labels)')
+				   help='Ground truth directory with out{cam}_frame_{num}*.txt files (default: dataset/val/labels)')
 	p.add_argument('--eval-out-dir', type=str, default='runs/eval', 
-				   help='Directory output metriche JSON (default: runs/eval)')
+				   help='Output directory for evaluation metrics JSON (default: runs/eval)')
 	
 	return p.parse_args()
 
 
 # ----------------------------------------
-# Esempi di utilizzo
+# Usage examples
 # ----------------------------------------
 if __name__ == '__main__':
-	# Test configurazione default
+	# Test default configuration
 	config = PipelineConfig.default()
-	print("Config default:")
+	print("Default config:")
 	print(f"  Model: {config.model}")
 	print(f"  Conf threshold: {config.conf_thres}")
 	print(f"  Cameras: {config.cameras}")
 	print(f"  Device: {config.device}")
 	
-	# Test parsing argomenti
-	print("\nParsing command-line args...")
+	# Test command-line argument parsing
+	print("\nParsing command-line arguments...")
 	args = get_args()
 	config = PipelineConfig.from_args(args)
 	print(f"  Model from args: {config.model}")

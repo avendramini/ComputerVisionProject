@@ -1,7 +1,7 @@
 def rectify_labels(label_dir, calib_path, img_w, img_h, output_dir):
     """
-    Rettifica le label YOLO (x_center, y_center) usando la stessa mappa di undistortion del video.
-    Salva i file rettificati in output_dir.
+    Rectifies YOLO labels (x_center, y_center) using the same undistortion map as the video.
+    Saves rectified files in output_dir.
     """
     mtx, dist = load_calibration(calib_path)
     if not os.path.exists(output_dir):
@@ -19,17 +19,17 @@ def rectify_labels(label_dir, calib_path, img_w, img_h, output_dir):
                 cls = parts[0]
                 x, y, w, h = map(float, parts[1:5])
                 conf = parts[5] if len(parts) > 5 else None
-                # Denormalizza centro bbox
+                # Denormalize bbox center
                 px = x * img_w
                 py = y * img_h
-                # Rettifica centro bbox
+                # Rectify bbox center
                 pt = np.array([[[px, py]]], dtype=np.float32)  # shape (1,1,2)
                 pt_rect = cv2.undistortPoints(pt, mtx, dist, P=mtx)
                 rx, ry = pt_rect[0,0,0], pt_rect[0,0,1]
-                # Rinormalizza
+                # Renormalize
                 x_new = rx / img_w
                 y_new = ry / img_h
-                # Mantieni w,h invariati (approssimazione)
+                # Keep w,h unchanged (approximation)
                 if conf is not None:
                     new_line = f"{cls} {x_new:.6f} {y_new:.6f} {w:.6f} {h:.6f} {conf}\n"
                 else:
@@ -100,7 +100,7 @@ def main():
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Rettifica anche le label YOLO
+    # Rectify YOLO labels as well
     for video_path in video_files:
         basename = os.path.basename(video_path)
         match = re.search(r'out(\d+)\.mp4', basename)
@@ -109,11 +109,11 @@ def main():
             calib_path = os.path.join("Camera_config2", f"cam_{cam_index}", "calib", "camera_calib.json")
             label_dir = os.path.join("dataset", "infer_video", f"labels_out{cam_index}")
             output_label_dir = os.path.join(output_dir, f"labels_out{cam_index}")
-            # Ricava dimensione immagine dal video
+            # Get image dimensions from video
             cap = cv2.VideoCapture(video_path)
             ret, frame = cap.read()
             if not ret:
-                print(f"Impossibile leggere {video_path} per dimensione immagine")
+                print(f"Cannot read {video_path} for image dimensions")
                 continue
             img_h, img_w = frame.shape[:2]
             cap.release()
@@ -136,11 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# ----------------------------------------
-# How to run (PowerShell)
-# ----------------------------------------
-# Rettifica tutti i video in dataset/video/out*.mp4 secondo le calibrazioni e salva in ./rectified/:
-#   python rectified_videos.py
-# Nota: Il percorso delle calibrazioni è impostato su Camera_config2/cam_{id}/calib/camera_calib.json;
-# adatta questi percorsi se le tue calibrazioni sono in cartelle diverse (es. camparams/...).

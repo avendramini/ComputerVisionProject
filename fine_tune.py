@@ -1,7 +1,6 @@
 import os
 from ultralytics import YOLO
 import yaml
-import torch
 def create_dataset_yaml(train_path, val_path, class_names, save_path="dataset.yaml"):
     """Create dataset configuration file for YOLO training.
 
@@ -41,8 +40,8 @@ def create_dataset_yaml(train_path, val_path, class_names, save_path="dataset.ya
 
     with open(save_path, 'w') as f:
         yaml.dump(dataset_config, f, sort_keys=False)
-    print(f"[INFO] Creato file dataset YAML: {save_path}")
-    print(f"[INFO] Contenuto: {dataset_config}")
+    print(f"[INFO] Created dataset YAML file: {save_path}")
+    print(f"[INFO] Content: {dataset_config}")
     return save_path
 
 def fine_tune_yolo(model_size='yolov8n.pt', dataset_yaml='dataset.yaml', epochs=100, imgsz=640):
@@ -95,7 +94,7 @@ if __name__ == "__main__":
     
     # Fine-tune the model
     model, results = fine_tune_yolo(
-        model_size='yolo12n.pt',  # Options: yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
+        model_size='yolo11n.pt',  
         dataset_yaml=dataset_yaml,
         epochs=100,
         imgsz=1920

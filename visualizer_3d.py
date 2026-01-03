@@ -3,14 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Tuple
 import csv
-import math
-
 import numpy as np
 
-# Matplotlib for interactive 3D visualization
-import matplotlib
+
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D)
+from mpl_toolkits.mplot3d import Axes3D  
 
 # Reuse calibration loader
 from triangulation_3d import load_calibrations_for_cams
@@ -18,28 +15,34 @@ import json
 
 
 def load_points_csv(csv_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, float, float]]], List[int]]:
-	"""Load points.csv into a frame-indexed structure.
+    """
+    Load points.csv into a frame-indexed structure.
 
-	Returns:
-	  - frames_points: {frame: [(class_id, x, y, z), ...]}
-	  - sorted unique class ids present
-	"""
-	frames_points: Dict[int, List[Tuple[int, float, float, float]]] = {}
-	classes = set()
-	with csv_path.open("r", encoding="utf-8") as f:
-		reader = csv.DictReader(f)
-		for row in reader:
-			fi = int(row["frame"]) if "frame" in row else int(row["Frame"])  # tolerant
-			ci = int(row["class_id"]) if "class_id" in row else int(row.get("class", 0))
-			x = float(row.get("x_m", row.get("x", 0.0)))
-			y = float(row.get("y_m", row.get("y", 0.0)))
-			z = float(row.get("z_m", row.get("z", 0.0)))
-			frames_points.setdefault(fi, []).append((ci, x, y, z))
-			classes.add(ci)
-	return frames_points, sorted(classes)
+    Returns:
+        - frames_points: {frame: [(class_id, x, y, z), ...]}
+        - sorted unique class ids present
+    """
+    frames_points: Dict[int, List[Tuple[int, float, float, float]]] = {}
+    classes = set()
+    with csv_path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            fi = int(row["frame"]) if "frame" in row else int(row["Frame"])  # tolerant
+            ci = int(row["class_id"]) if "class_id" in row else int(row.get("class", 0))
+            x = float(row.get("x_m", row.get("x", 0.0)))
+            y = float(row.get("y_m", row.get("y", 0.0)))
+            z = float(row.get("z_m", row.get("z", 0.0)))
+            frames_points.setdefault(fi, []).append((ci, x, y, z))
+            classes.add(ci)
+    return frames_points, sorted(classes)
 
 def load_points_json(json_path: Path) -> Tuple[Dict[int, List[Tuple[int, float, float, float]]], List[int]]:
-    """Load points.json with schema {frames: {"0":[{class_id,x,y,z},...]}} into same structure as CSV loader."""
+    """
+    Load points.json with schema {frames: {"0":[{class_id,x,y,z},...]}} into the same structure as the CSV loader.
+    Returns:
+      - frames_points: {frame: [(class_id, x, y, z), ...]}
+      - sorted unique class ids present
+    """
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     frames_points: Dict[int, List[Tuple[int, float, float, float]]] = {}
@@ -373,19 +376,19 @@ class FrameViewer3D:
         # Set aspect ratio to match the data ranges so the court doesn't look square
         self.ax.set_box_aspect((xmax - xmin, ymax - ymin, zmax - zmin))
 
-        self.ax.set_title(f"Frame {frame_idx} | {len(pts)} punti")
+        self.ax.set_title(f"Frame {frame_idx} | {len(pts)} points")
         plt.draw()
 
 def visualize_triangulated_points(points_json: Path | None = None, points_csv: Path | None = None, camparams_dir: Path = Path('camparams')):
     """
-    Visualizza i punti triangolati in modo interattivo.
+    Visualize triangulated points interactively.
     
     Args:
-        points_json: Percorso al file points.json (prioritario se fornito)
-        points_csv: Percorso al file points.csv (fallback)
-        camparams_dir: Directory con le calibrazioni delle camere
+        points_json: Path to points.json file (priority if provided)
+        points_csv: Path to points.csv file (fallback)
+        camparams_dir: Directory with camera calibrations
     
-    Se nessun file è specificato, cerca automaticamente in runs/triangulation/
+    If no file is specified, automatically searches in runs/triangulation/
     """
     # Load triangulated points (prefer JSON, fallback to CSV)
     if points_json is None and points_csv is None:
@@ -401,7 +404,7 @@ def visualize_triangulated_points(points_json: Path | None = None, points_csv: P
     elif points_csv and points_csv.exists():
         frames_points, classes = load_points_csv(points_csv)
     else:
-        print(f"Punti non trovati in {points_json} o {points_csv}. Esegui triangulation_3d.py.")
+        print(f"Points not found in {points_json} or {points_csv}. Run triangulation_3d.py.")
         return
 
     # Try to load camera params (optional)
@@ -414,22 +417,7 @@ def visualize_triangulated_points(points_json: Path | None = None, points_csv: P
     viewer.save_top_down_trajectories()
     viewer.save_side_view_trajectory_ball()
 
-    print("Navigazione: frecce sinistra/destra (o A/D), Home, End")
-    print("Funzioni: 's' per salvare le traiettorie (vista dall'alto) come immagini")
+    print("Navigation: Left/Right arrows (or A/D), Home, End")
+    print("Functions: 's' to save trajectories (top-down view) as images")
     plt.show()
 
-
-def main():
-    """Entry point per esecuzione standalone da CLI"""
-    visualize_triangulated_points()
-
-
-if __name__ == '__main__':
-	main()
-
-# ----------------------------------------
-# How to run (PowerShell)
-# ----------------------------------------
-# Visualizza i punti triangolati (preferisce runs/triangulation/points.json, fallback a CSV):
-#   python visualizer_3d.py
-# Navigazione: frecce sinistra/destra (o A/D) per frame precedente/successivo, Home/End per primo/ultimo.

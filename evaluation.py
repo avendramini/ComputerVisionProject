@@ -1,47 +1,34 @@
 """
-Modulo di valutazione per modelli YOLO su dataset di test e per confronto label-vs-label.
+Evaluation module for YOLO models on test datasets and for label-vs-label comparison.
 
-Funzionalità principali:
-  1. Inferenza YOLO + calcolo IOU contro ground truth (compute_iou_metrics)
-  2. Confronto labels già pronte (no inferenza) contro GT (compute_iou_metrics_from_predictions)
-  3. Supporto per valutazione video con pattern file flessibili
-  4. Export metriche JSON per analisi
-
-Uso tipico:
-    # Con modello YOLO:
-    python evaluation.py --model fine_tuned_yolo.pt --images dataset/test/images --labels dataset/test/labels
-    
-    # Da pipeline (labels-vs-labels):
-    from evaluation import load_labels_dir_map, compute_iou_metrics_from_predictions
-    gt = load_labels_dir_map(Path('dataset/val/labels'), camera_id=13)
-    pred = {...}  # da inferenza o interpolazione
-    metrics = compute_iou_metrics_from_predictions(pred, gt)
+Main features:
+    1. YOLO inference + IoU calculation against ground truth (compute_iou_metrics)
+    2. Comparison of pre-existing labels (no inference) against GT (compute_iou_metrics_from_predictions)
+    3. Support for video evaluation with flexible file patterns
+    4. Export metrics as JSON for analysis
 """
 import os
 from pathlib import Path
 import numpy as np
-from ultralytics import YOLO
-import cv2
 import matplotlib.pyplot as plt
 import json
-from config import get_args, PipelineConfig
 
 def load_yolo_labels(label_path):
     """
-    Carica bounding boxes da file YOLO txt (formato YOLOv8: class x y w h).
-    
+    Loads bounding boxes from YOLO txt file (YOLOv8 format: class x y w h).
+
     Args:
-        label_path: Path file .txt con labels (una per riga)
-    
+        label_path: Path to .txt file with labels (one per line)
+
     Returns:
-        boxes: Lista di tuple (class_id, x, y, w, h) normalizzate [0,1]
-    
-    Formato file:
+        boxes: List of tuples (class_id, x, y, w, h) normalized to [0,1]
+
+    File format:
         0 0.5 0.5 0.1 0.2
         1 0.3 0.7 0.15 0.25
         ...
-    
-    Esempio:
+
+    Example:
         boxes = load_yolo_labels('dataset/val/labels/out13_frame_0001.txt')
         # boxes = [(0, 0.192, 0.443, 0.005, 0.009), (1, 0.357, 0.534, 0.026, 0.095), ...]
     """
@@ -60,27 +47,27 @@ def load_yolo_labels(label_path):
 
 def box_iou(box1, box2):
     """
-    Calcola Intersection over Union (IoU) tra due bounding box normalizzate.
-    
+    Calculates Intersection over Union (IoU) between two normalized bounding boxes.
+
     Args:
-        box1: Tuple (x, y, w, h) coordinate normalizzate [0,1]
-        box2: Tuple (x, y, w, h) coordinate normalizzate [0,1]
-    
+        box1: Tuple (x, y, w, h) normalized coordinates [0,1]
+        box2: Tuple (x, y, w, h) normalized coordinates [0,1]
+
     Returns:
-        iou: Float in [0,1], 0=nessuna sovrapposizione, 1=perfetta coincidenza
-    
+        iou: Float in [0,1], 0=no overlap, 1=perfect match
+
     Note:
-        - x,y sono coordinate del centro bbox
-        - w,h sono larghezza e altezza normalizzate
-        - Converte internamente in formato xyxy per calcolo intersezione
-    
-    Esempio:
-        box1 = (0.5, 0.5, 0.2, 0.2)  # centro (0.5,0.5), size 20%x20%
-        box2 = (0.52, 0.51, 0.18, 0.19)  # parzialmente sovrapposta
+        - x,y are bbox center coordinates
+        - w,h are normalized width and height
+        - Converts internally to xyxy format for intersection calculation
+
+    Example:
+        box1 = (0.5, 0.5, 0.2, 0.2)  # center (0.5,0.5), size 20%x20%
+        box2 = (0.52, 0.51, 0.18, 0.19)  # partially overlapping
         iou = box_iou(box1, box2)
-        # iou ≈ 0.75 (alta sovrapposizione)
+        # iou ≈ 0.75 (high overlap)
     """
-    # Funzione interna per conversione xywh → xyxy
+    # Internal function for xywh -> xyxy conversion
     def to_xyxy(x, y, w, h):
         x1 = x - w/2
         y1 = y - h/2
@@ -88,11 +75,11 @@ def box_iou(box1, box2):
         y2 = y + h/2
         return x1, y1, x2, y2
     
-    # Converte entrambe le box in formato xyxy
+    # Convert both boxes to xyxy format
     x1_1, y1_1, x2_1, y2_1 = to_xyxy(*box1)
     x1_2, y1_2, x2_2, y2_2 = to_xyxy(*box2)
     
-    # Calcola rettangolo di intersezione
+    # Calculate intersection rectangle
     xi1 = max(x1_1, x1_2)
     yi1 = max(y1_1, y1_2)
     xi2 = min(x2_1, x2_2)
@@ -101,11 +88,11 @@ def box_iou(box1, box2):
     inter_h = max(0, yi2 - yi1)
     inter_area = inter_w * inter_h
     
-    # Calcola aree delle due box
+    # Calculate areas of both boxes
     area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
     area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
     
-    # Union = somma - intersezione
+    # Union = sum - intersection
     union = area1 + area2 - inter_area
     if union == 0:
         return 0.0
@@ -113,60 +100,117 @@ def box_iou(box1, box2):
 
 def per_class_iou(gt_boxes, pred_boxes, num_classes=13):
     """
-    Calcola IOU per ogni classe usando matching greedy (best IoU per prediction).
-    Penalizza falsi negativi (GT non matchate) aggiungendo IoU=0.
-    
+    Calculates IoU for each class. Optimized for max 1 object per class per frame.
+
     Args:
-        gt_boxes: Lista di ground truth [(class, x, y, w, h), ...]
-        pred_boxes: Lista di predictions [(class, x, y, w, h), ...]
-        num_classes: Numero totale di classi nel dataset (default 13)
-    
+        gt_boxes: List of ground truth [(class, x, y, w, h), ...]
+        pred_boxes: List of predictions [(class, x, y, w, h), ...]
+        num_classes: Total number of classes in the dataset (default 13)
+
     Returns:
-        iou_per_class: Dict {class_id: [iou_values]} con IOU per ogni prediction matchata + GT persa
-    
-    Algoritmo:
-        1. Per ogni classe, filtra GT e predictions
-        2. Per ogni prediction, trova GT con massimo IoU (greedy)
-        3. Marca GT usate per evitare match multipli
-        4. Se nessun match, IOU=0 per quella prediction (falso positivo debole)
-        5. Per ogni GT non matchata, aggiungi IOU=0 (falso negativo - PENALIZZAZIONE)
-        6. Ignora classi senza GT in questo frame
-    
-    Esempio:
-        # Caso 1: Perfetto match
-        gt = [(0, 0.5, 0.5, 0.1, 0.1), (1, 0.3, 0.7, 0.15, 0.2)]
-        pred = [(0, 0.51, 0.49, 0.09, 0.11), (1, 0.32, 0.68, 0.14, 0.21)]
+        iou_per_class: Dict {class_id: [iou_values]} with single IoU value per class
+
+    Logic (for max 1 object per class per frame):
+        - If GT exists and pred exists for same class → IoU between them
+        - If only GT exists (pred missing) → IoU = 0.0 (false negative - PENALTY)
+        - If only pred exists (GT missing) → IoU = 0.0 (false positive)
+        - If neither exists → skip (no entry for that class)
+
+    Example:
+        # Case 1: Perfect match (1 ball detected)
+        gt = [(0, 0.5, 0.5, 0.1, 0.1)]
+        pred = [(0, 0.51, 0.49, 0.09, 0.11)]
         iou_pc = per_class_iou(gt, pred)
-        # iou_pc = {0: [0.85], 1: [0.92], 2: [], ...}  # alta sovrapposizione
-        
-        # Caso 2: Falso negativo (GT persa)
-        gt = [(0, 0.5, 0.5, 0.1, 0.1)]  # 1 palla
-        pred = []                       # modello non la vede
+        # iou_pc = {0: [0.85], 1: [], 2: [], ...}
+
+        # Case 2: False negative (1 ball missed by model)
+        gt = [(0, 0.5, 0.5, 0.1, 0.1)]
+        pred = []
         iou_pc = per_class_iou(gt, pred)
-        # iou_pc = {0: [0.0], 1: [], ...}  # GT persa = IoU 0 (penalizzata)
+        # iou_pc = {0: [0.0], 1: [], ...}  # penalize missed detection
+
+        # Case 3: False positive (model detected when no GT)
+        gt = []
+        pred = [(0, 0.5, 0.5, 0.1, 0.1)]
+        iou_pc = per_class_iou(gt, pred)
+        # iou_pc = {0: [0.0], 1: [], ...}  # penalize false positive
     """
     iou_per_class = {c: [] for c in range(num_classes)}
     
-    # Per ogni classe separatamente
+    # Build class dictionaries: class_id → single box or None
+    gt_by_class = {}
+    pred_by_class = {}
+    
+    for g in gt_boxes:
+        gt_by_class[g[0]] = g[1:]  # store (x, y, w, h)
+    
+    for p in pred_boxes:
+        pred_by_class[p[0]] = p[1:]  # store (x, y, w, h)
+    
+    # For each class with GT, calculate IoU
+    for c in gt_by_class:
+        gt_box = gt_by_class[c]
+        pred_box = pred_by_class.get(c)
+        
+        if pred_box is not None:
+            # Both GT and pred exist: calculate IoU
+            iou = box_iou(pred_box, gt_box)
+        else:
+            # Only GT exists: false negative (IoU = 0)
+            iou = 0.0
+        
+        iou_per_class[c].append(iou)
+    
+    # NOTE: False Positives (Pred without GT) are NOT added to IoU list
+    # This ensures Mean IoU denominator is based on GT count only.
+    # TP/FP/FN counts are handled separately in per_class_tp_fp_fn.
+    
+    return iou_per_class
+
+
+def per_class_tp_fp_fn(gt_boxes, pred_boxes, num_classes=13, iou_threshold=0.5):
+    """
+    Calculates True Positives, False Positives, and False Negatives per class using greedy matching.
+    
+    Args:
+        gt_boxes: List of ground truth [(class, x, y, w, h), ...]
+        pred_boxes: List of predictions [(class, x, y, w, h), ...]
+        num_classes: Total number of classes (default 13)
+        iou_threshold: Minimum IoU to count as a match (default 0.5)
+    
+    Returns:
+        metrics: Dict {class_id: {'tp': int, 'fp': int, 'fn': int}}
+        
+    Example:
+        gt = [(0, 0.5, 0.5, 0.1, 0.1), (0, 0.3, 0.7, 0.1, 0.1)]
+        pred = [(0, 0.51, 0.49, 0.09, 0.11)]
+        metrics = per_class_tp_fp_fn(gt, pred, iou_threshold=0.5)
+        # metrics = {0: {'tp': 1, 'fp': 0, 'fn': 1}, 1: {'tp': 0, 'fp': 0, 'fn': 0}, ...}
+    """
+    metrics = {c: {'tp': 0, 'fp': 0, 'fn': 0} for c in range(num_classes)}
+    
+    # For each class separately
     for c in range(num_classes):
-        # Filtra GT e predictions per questa classe
+        # Filter GT and predictions for this class
         gt_c = [g for g in gt_boxes if g[0] == c]
         pred_c = [p for p in pred_boxes if p[0] == c]
         
-        # Se nessuna GT per questa classe, salta
+        # If no GT for this class
         if not gt_c:
+            # All predictions are FP
+            metrics[c]['fp'] = len(pred_c)
             continue
         
-        # Traccia GT già usate (un GT può matchare solo una prediction)
+        # Track matched GTs
         used = set()
         
-        # Per ogni prediction, trova best GT match
+        # For each prediction, find best GT match
         for p in pred_c:
             px, py, pw, ph = p[1:]
             best_iou = 0.0
             best_idx = -1
             
-            # Trova GT con massimo IoU non ancora usata
+            # Find GT with max IoU not yet used
             for idx, g in enumerate(gt_c):
                 if idx in used:
                     continue
@@ -176,138 +220,76 @@ def per_class_iou(gt_boxes, pred_boxes, num_classes=13):
                     best_iou = iou
                     best_idx = idx
             
-            # Marca GT come usata
-            if best_idx >= 0:
+            # Check if IoU exceeds threshold
+            if best_iou >= iou_threshold and best_idx >= 0:
+                metrics[c]['tp'] += 1
                 used.add(best_idx)
-            
-            # Registra IOU (anche se 0 per falso positivo)
-            iou_per_class[c].append(best_iou)
+            else:
+                metrics[c]['fp'] += 1
         
-        # ⭐ NUOVO: Penalizza GT non matchate (falsi negativi)
-        # Per ogni GT di questa classe che non è stata usata
+        # For each unmatched GT -> FN
         for idx in range(len(gt_c)):
             if idx not in used:
-                # GT persa dal modello → aggiungi IoU=0
-                iou_per_class[c].append(0.0)
+                metrics[c]['fn'] += 1
     
-    return iou_per_class
+    return metrics
 
 
-def compute_iou_metrics(model_path: str, images_dir: str, labels_dir: str, imgsz: int = 1920, device: str = 'auto', conf_thres: float = 0.01, num_classes: int = 13) -> dict:
+def compute_precision_recall_f1(tp, fp, fn):
     """
-    Esegue inferenza YOLO su dataset e calcola metriche IOU contro ground truth.
+    Computes precision, recall and F1-score from TP, FP, FN counts.
     
     Args:
-        model_path: Path al modello YOLO .pt
-        images_dir: Directory con immagini (.jpg, .png, .bmp)
-        labels_dir: Directory con label YOLO .txt (stesso nome immagini)
-        imgsz: Dimensione input YOLO (default 1920)
-        device: Device inferenza 'auto', 'cpu', '0', '0,1' (default 'auto')
-        conf_thres: Confidence threshold minima (default 0.01)
-        num_classes: Numero classi del modello (default 13)
+        tp: True positives count
+        fp: False positives count
+        fn: False negatives count
     
     Returns:
-        metrics: Dict con:
-          - 'per_image': [{'image': str, 'average_iou': float}, ...]
-          - 'per_class': {class_id: {'mean_iou': float|None, 'count': int}, ...}
-          - 'mean_iou': float (media su tutte le immagini)
-          - 'images_count': int
-          - 'images_dir', 'labels_dir', 'model', 'imgsz', 'device', 'conf_thres'
-    
-    Esempio:
-        metrics = compute_iou_metrics(
-            model_path='weights/fine_tuned_yolo_final.pt',
-            images_dir='dataset/test/images',
-            labels_dir='dataset/test/labels',
-            device='0'
-        )
-        print(f"Mean IOU: {metrics['mean_iou']:.3f}")
-        print(f"Classe 0 (Ball): {metrics['per_class'][0]['mean_iou']:.3f}")
+        metrics: Dict with 'precision', 'recall', 'f1' (or None if undefined)
+        
+    Example:
+        metrics = compute_precision_recall_f1(tp=10, fp=2, fn=3)
+        # metrics = {'precision': 0.833, 'recall': 0.769, 'f1': 0.800}
     """
-    # Carica modello YOLO
-    model = YOLO(model_path)
+    precision = None
+    recall = None
+    f1 = None
     
-    # Lista immagini da valutare
-    images = sorted([p for p in Path(images_dir).glob('*') if p.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp'}])
+    # Precision = TP / (TP + FP)
+    if tp + fp > 0:
+        precision = float(tp) / (tp + fp)
     
-    per_image = []
-    all_iou_per_class = {c: [] for c in range(num_classes)}
+    # Recall = TP / (TP + FN)
+    if tp + fn > 0:
+        recall = float(tp) / (tp + fn)
     
-    # Per ogni immagine
-    for img_path in images:
-        # Carica ground truth
-        label_path = Path(labels_dir) / (img_path.stem + '.txt')
-        gt_boxes = load_yolo_labels(label_path)
-        
-        # Inferenza YOLO
-        pred = model.predict(source=str(img_path), device=device, verbose=False, imgsz=imgsz, conf=conf_thres)
-        
-        # Estrai predictions normalizzate
-        pred_boxes = []
-        img = cv2.imread(str(img_path))
-        h, w = img.shape[:2] if img is not None else (1, 1)
-        if pred and hasattr(pred[0], 'boxes') and pred[0].boxes is not None:
-            for box in pred[0].boxes:
-                cls = int(box.cls.item())
-                xywh = box.xywh[0].cpu().numpy()
-                x, y, bw, bh = xywh
-                # Normalizza coordinate in [0,1]
-                x /= w; y /= h; bw /= w; bh /= h
-                pred_boxes.append((cls, x, y, bw, bh))
-        
-        # ⭐ SKIP frame senza GT (non c'è niente da valutare)
-        if not gt_boxes:
-            continue
-        
-        # Calcola IOU per classe
-        iou_pc = per_class_iou(gt_boxes, pred_boxes, num_classes=num_classes)
-        for c, ious in iou_pc.items():
-            all_iou_per_class[c].extend(ious)
-        
-        # Media IOU per questa immagine
-        avg_iou_img = float(np.mean([v for lst in iou_pc.values() for v in lst])) if any(iou_pc.values()) else 0.0
-        per_image.append({"image": img_path.name, "average_iou": avg_iou_img})
-
-    # Aggrega statistiche per classe
-    per_class = {}
-    for c, ious in all_iou_per_class.items():
-        per_class[c] = {"mean_iou": float(np.mean(ious)) if ious else None, "count": int(len(ious))}
-    
-    # Media globale (per box)
-    all_ious = [iou for ious in all_iou_per_class.values() for iou in ious]
-    mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
+    # F1 = 2 * (Precision * Recall) / (Precision + Recall)
+    if precision is not None and recall is not None and precision + recall > 0:
+        f1 = 2.0 * (precision * recall) / (precision + recall)
     
     return {
-        "per_image": per_image,
-        "per_class": per_class,
-        "mean_iou": mean_iou,
-        "images_count": len(per_image),
-        "images_dir": str(images_dir),
-        "labels_dir": str(labels_dir),
-        "model": str(model_path),
-        "imgsz": imgsz,
-        "device": device,
-        "conf_thres": conf_thres,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
     }
-
 
 def save_eval_json(metrics: dict, out_json: Path):
     """
-    Salva metriche di valutazione in JSON.
+    Saves evaluation metrics to JSON file.
     
     Args:
-        metrics: Dict con metriche da salvare
-        out_json: Path file JSON output
+        metrics: Dict containing metrics to save
+        out_json: Path to output JSON file
     
-    Esempio:
+    Example:
         metrics = compute_iou_metrics(...)
         save_eval_json(metrics, Path('runs/eval/eval_cam13_raw.json'))
-        # File salvato: runs/eval/eval_cam13_raw.json
+        # File saved: runs/eval/eval_cam13_raw.json
     """
     out_json.parent.mkdir(parents=True, exist_ok=True)
     with out_json.open('w', encoding='utf-8') as f:
         json.dump(metrics, f)
-    print(f"[EVAL] Salvate metriche in {out_json}")
+    print(f"[EVAL] Saved metrics to {out_json}")
 
 
 # -----------------------
@@ -316,25 +298,25 @@ def save_eval_json(metrics: dict, out_json: Path):
 
 def load_labels_dir_map(labels_dir: Path, camera_id: int | None = None) -> dict[int, list[tuple[int, float, float, float, float]]]:
     """
-    Carica labels YOLO da directory txt organizzata per frame.
-    Supporta due pattern di naming:
+    Loads YOLO labels from txt directory organized by frame.
+    Supports two naming patterns:
     - Standard: frame_XXXXX.txt
     - Roboflow: out{cam}_frame_{num}_png.rf.{hash}.txt
     
     Args:
-        labels_dir: Path directory con file .txt (es. Path('dataset/val/labels'))
-        camera_id: Se specificato, filtra solo frame per quella camera (pattern Roboflow)
+        labels_dir: Directory path with .txt files (e.g. Path('dataset/val/labels'))
+        camera_id: If specified, filters only frames for that camera (Roboflow pattern)
     
     Returns:
         frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]}
         
-    Esempio Standard:
-        # labels_dir contiene: frame_00001.txt, frame_00002.txt, ...
+    Standard Example:
+        # labels_dir contains: frame_00001.txt, frame_00002.txt, ...
         frames = load_labels_dir_map(Path('dataset/gt_video/labels'))
         print(frames[1])  # [(0, 0.5, 0.5, 0.1, 0.1), (5, 0.3, 0.4, 0.08, 0.09)]
     
-    Esempio Roboflow:
-        # labels_dir contiene: out13_frame_0001_png.rf.{hash}.txt, out4_frame_0012_png.rf.{hash}.txt, ...
+    Roboflow Example:
+        # labels_dir contains: out13_frame_0001_png.rf.{hash}.txt, out4_frame_0012_png.rf.{hash}.txt, ...
         frames_cam13 = load_labels_dir_map(Path('dataset/val/labels'), camera_id=13)
         frames_cam4 = load_labels_dir_map(Path('dataset/val/labels'), camera_id=4)
         print(len(frames_cam13))  # 110
@@ -343,7 +325,7 @@ def load_labels_dir_map(labels_dir: Path, camera_id: int | None = None) -> dict[
     if not labels_dir.exists():
         return frames
     
-    # Pattern regex per Roboflow: out{cam}_frame_{num}_png.rf.{hash} oppure out{cam}_frame_{num}
+    # Regex pattern for Roboflow: out{cam}_frame_{num}_png.rf.{hash} or out{cam}_frame_{num}
     import re
     
     for p in sorted(labels_dir.glob('*.txt')):
@@ -351,17 +333,17 @@ def load_labels_dir_map(labels_dir: Path, camera_id: int | None = None) -> dict[
         fi = None  # frame index
         cam = None  # camera id
         
-        # Pattern Roboflow: out{cam}_frame_{num}_png.rf.{hash}
+        # Roboflow pattern: out{cam}_frame_{num}_png.rf.{hash}
         m = re.match(r"out(\d+)_frame_(\d+)", stem)
         if m:
             cam = int(m.group(1))
             fi = int(m.group(2))
-        # Pattern standard: frame_00012
+        # Standard pattern: frame_00012
         elif stem.startswith('frame_') and '_' not in stem[6:]:
             if stem[6:].isdigit():
                 fi = int(stem[6:])
         else:
-            # Fallback: prendi numeri finali
+            # Fallback: take final numbers
             m2 = re.search(r"(\d+)$", stem)
             if m2:
                 fi = int(m2.group(1))
@@ -369,11 +351,11 @@ def load_labels_dir_map(labels_dir: Path, camera_id: int | None = None) -> dict[
         if fi is None:
             continue
         
-        # Filtra per camera se specificato
+        # Filter by camera if specified
         if camera_id is not None and cam is not None and cam != camera_id:
             continue
         
-        # Carica bounding boxes da file
+        # Load bounding boxes from file
         boxes = load_yolo_labels(str(p))  # [(cls,x,y,w,h)]
         frames[fi] = [(int(b[0]), float(b[1]), float(b[2]), float(b[3]), float(b[4])) for b in boxes]
     
@@ -382,18 +364,18 @@ def load_labels_dir_map(labels_dir: Path, camera_id: int | None = None) -> dict[
 
 def frames_from_perframe(perframe: dict[int, dict[int, tuple[float, float, float, float, float]]]) -> dict[int, list[tuple[int, float, float, float, float]]]:
     """
-    Converte struttura PerFrame {frame: {cls: (x,y,w,h,conf)}} in formato evaluation {frame: [(cls,x,y,w,h),...]}.
+    Converts PerFrame structure {frame: {cls: (x,y,w,h,conf)}} to evaluation format {frame: [(cls,x,y,w,h),...]}.
     
     Args:
         perframe: Dict {frame_idx: {class_id: (x, y, w, h, conf)}}
-                  Struttura interna pipeline con confidence
+                  Internal pipeline structure with confidence
     
     Returns:
         frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]}
-                Formato per evaluation (senza confidence)
+                Evaluation format (without confidence)
     
-    Esempio:
-        # Input da pipeline dopo interpolazione
+    Example:
+        # Input from pipeline after interpolation
         perframe = {
             1: {0: (0.5, 0.5, 0.1, 0.1, 0.95), 5: (0.3, 0.4, 0.08, 0.09, 0.87)},
             2: {0: (0.51, 0.52, 0.1, 0.1, 0.93)}
@@ -405,12 +387,12 @@ def frames_from_perframe(perframe: dict[int, dict[int, tuple[float, float, float
     """
     out: dict[int, list[tuple[int, float, float, float, float]]] = {}
     
-    # Per ogni frame
+    # For each frame
     for fi, dets in perframe.items():
         lst = []
-        # Per ogni detection (class_id: (x,y,w,h,conf))
+        # For each detection (class_id: (x,y,w,h,conf))
         for cls_id, (x, y, w, h, _conf) in dets.items():
-            # Scarta confidence, mantieni solo bbox
+            # Discard confidence, keep only bbox
             lst.append((int(cls_id), float(x), float(y), float(w), float(h)))
         out[int(fi)] = lst
     
@@ -421,31 +403,31 @@ def compute_iou_metrics_from_predictions(pred_frames: dict[int, list[tuple[int, 
                                          gt_frames: dict[int, list[tuple[int, float, float, float, float]]],
                                          num_classes: int | None = None) -> dict:
     """
-    Calcola metriche IOU confrontando predizioni già pronte (senza modello) con GT per frame/classe.
+    Calculates IOU metrics by comparing ready-made predictions (no model) with GT per frame/class.
     
     Args:
-        pred_frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]} predizioni normalizzate
-        gt_frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]} ground truth normalizzate
-        num_classes: Numero classi (auto-detect se None)
+        pred_frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]} normalized predictions
+        gt_frames: Dict {frame_idx: [(class_id, x, y, w, h), ...]} normalized ground truth
+        num_classes: Number of classes (auto-detect if None)
     
     Returns:
-        metrics: Dict con:
+        metrics: Dict with:
           - 'mode': 'labels-vs-labels'
-          - 'frames_evaluated': int numero frame valutati
+          - 'frames_evaluated': int number of frames evaluated
           - 'per_frame': [{'frame': int, 'average_iou': float}, ...]
           - 'per_class': {class_id: {'mean_iou': float|None, 'count': int}, ...}
-          - 'mean_iou': float (media su tutti i frame)
+          - 'mean_iou': float (average over all frames)
           - 'num_classes': int
     
     Note:
-        Usato da pipeline.py per valutazioni RAW e INTERP (senza re-inference).
+        Used by pipeline.py for RAW and INTERP evaluations (without re-inference).
     
-    Esempio:
-        # Predizioni dopo tracking
+    Example:
+        # Predictions after tracking
         pred_frames = {1: [(0, 0.5, 0.5, 0.1, 0.1), (5, 0.3, 0.4, 0.08, 0.09)],
                       2: [(0, 0.51, 0.52, 0.1, 0.1)]}
         
-        # Ground truth da dataset/val/labels
+        # Ground truth from dataset/val/labels
         gt_frames = {1: [(0, 0.49, 0.51, 0.11, 0.09), (5, 0.31, 0.39, 0.09, 0.1)],
                     2: [(0, 0.50, 0.53, 0.10, 0.11)]}
         
@@ -453,13 +435,13 @@ def compute_iou_metrics_from_predictions(pred_frames: dict[int, list[tuple[int, 
         print(f"Mean IOU: {metrics['mean_iou']:.3f}")  # 0.823
         print(f"Frames: {metrics['frames_evaluated']}")  # 2
     """
-    # Trova frame comuni tra pred e GT (matching)
-    frames_matching = sorted(set(pred_frames.keys()) & set(gt_frames.keys()))
+    # Find all frames to evaluate (union of pred and GT)
+    frames_to_evaluate = sorted(set(pred_frames.keys()) | set(gt_frames.keys()))
 
-    # Trova tutti i frame GT (per valutazione su tutti i GT)
+    # Find all GT frames (for evaluation on all GT)
     frames_gt = sorted(gt_frames.keys())
 
-    # Auto-detect numero classi se non specificato
+    # Auto-detect number of classes if not specified
     if num_classes is None:
         max_cls = -1
         for d in (pred_frames, gt_frames):
@@ -468,156 +450,129 @@ def compute_iou_metrics_from_predictions(pred_frames: dict[int, list[tuple[int, 
                     max_cls = max(max_cls, int(it[0]))
         num_classes = max(0, max_cls + 1)
 
-    # --- METRICA STANDARD: solo frame matching ---
+    # --- STANDARD METRIC: on all frames ---
     all_iou_per_class = {c: [] for c in range(num_classes)}
+    all_tp = {c: 0 for c in range(num_classes)}
+    all_fp = {c: 0 for c in range(num_classes)}
+    all_fn = {c: 0 for c in range(num_classes)}
+    
     per_frame = []
-    for fi in frames_matching:
+    for fi in frames_to_evaluate:
         pred = pred_frames.get(fi, [])
         gt = gt_frames.get(fi, [])
         iou_pc = per_class_iou(gt, pred, num_classes=num_classes)
+        
+        # Calculate TP/FP/FN
+        tp_fp_fn = per_class_tp_fp_fn(gt, pred, num_classes=num_classes, iou_threshold=0.5)
+        for c, metrics in tp_fp_fn.items():
+            all_tp[c] += metrics['tp']
+            all_fp[c] += metrics['fp']
+            all_fn[c] += metrics['fn']
+        
         for c, ious in iou_pc.items():
             all_iou_per_class[c].extend(ious)
         avg_iou = float(np.mean([v for lst in iou_pc.values() for v in lst])) if any(iou_pc.values()) else 0.0
         per_frame.append({"frame": int(fi), "average_iou": avg_iou})
-    per_class = {c: {"mean_iou": float(np.mean(v)) if v else None, "count": int(len(v))} for c, v in all_iou_per_class.items()}
+    
+    # Build per_class with complete metrics
+    per_class = {}
+    for c in range(num_classes):
+        ious = all_iou_per_class[c]
+        prec_recall_f1 = compute_precision_recall_f1(all_tp[c], all_fp[c], all_fn[c])
+        per_class[c] = {
+            "mean_iou": float(np.mean(ious)) if ious else None,
+            "count": int(all_tp[c] + all_fn[c]),
+            "tp": int(all_tp[c]),
+            "fp": int(all_fp[c]),
+            "fn": int(all_fn[c]),
+            "precision": prec_recall_f1['precision'],
+            "recall": prec_recall_f1['recall'],
+            "f1": prec_recall_f1['f1'],
+        }
+    
     all_ious = [iou for ious in all_iou_per_class.values() for iou in ious]
     mean_iou = float(np.mean(all_ious)) if all_ious else 0.0
+    
+    # Global metrics for frame matching
+    global_tp = sum(all_tp.values())
+    global_fp = sum(all_fp.values())
+    global_fn = sum(all_fn.values())
+    global_prec_recall_f1 = compute_precision_recall_f1(global_tp, global_fp, global_fn)
 
-    # --- NUOVA METRICA: su tutti i frame GT (assegna IoU=0 se manca la predizione) ---
+    # --- NEW METRIC: on all GT frames (assign IoU=0 if prediction missing) ---
     all_iou_per_class_gt = {c: [] for c in range(num_classes)}
+    all_tp_gt = {c: 0 for c in range(num_classes)}
+    all_fp_gt = {c: 0 for c in range(num_classes)}
+    all_fn_gt = {c: 0 for c in range(num_classes)}
+    
     per_frame_gt = []
     for fi in frames_gt:
-        pred = pred_frames.get(fi, [])  # se manca, lista vuota
+        pred = pred_frames.get(fi, [])  # if missing, empty list
         gt = gt_frames.get(fi, [])
         iou_pc = per_class_iou(gt, pred, num_classes=num_classes)
+        
+        # Calculate TP/FP/FN
+        tp_fp_fn_gt = per_class_tp_fp_fn(gt, pred, num_classes=num_classes, iou_threshold=0.5)
+        for c, metrics in tp_fp_fn_gt.items():
+            all_tp_gt[c] += metrics['tp']
+            all_fp_gt[c] += metrics['fp']
+            all_fn_gt[c] += metrics['fn']
+        
         for c, ious in iou_pc.items():
             all_iou_per_class_gt[c].extend(ious)
         avg_iou = float(np.mean([v for lst in iou_pc.values() for v in lst])) if any(iou_pc.values()) else 0.0
         per_frame_gt.append({"frame": int(fi), "average_iou": avg_iou})
-    per_class_gt = {c: {"mean_iou": float(np.mean(v)) if v else None, "count": int(len(v))} for c, v in all_iou_per_class_gt.items()}
+    
+    # Build per_class_gt with complete metrics
+    per_class_gt = {}
+    for c in range(num_classes):
+        ious = all_iou_per_class_gt[c]
+        prec_recall_f1_gt = compute_precision_recall_f1(all_tp_gt[c], all_fp_gt[c], all_fn_gt[c])
+        per_class_gt[c] = {
+            "mean_iou": float(np.mean(ious)) if ious else None,
+            "count": int(all_tp_gt[c] + all_fn_gt[c]),
+            "tp": int(all_tp_gt[c]),
+            "fp": int(all_fp_gt[c]),
+            "fn": int(all_fn_gt[c]),
+            "precision": prec_recall_f1_gt['precision'],
+            "recall": prec_recall_f1_gt['recall'],
+            "f1": prec_recall_f1_gt['f1'],
+        }
+    
     all_ious_gt = [iou for ious in all_iou_per_class_gt.values() for iou in ious]
     mean_iou_gt = float(np.mean(all_ious_gt)) if all_ious_gt else 0.0
+    
+    # Global metrics for all GT frames
+    global_tp_gt = sum(all_tp_gt.values())
+    global_fp_gt = sum(all_fp_gt.values())
+    global_fn_gt = sum(all_fn_gt.values())
+    global_prec_recall_f1_gt = compute_precision_recall_f1(global_tp_gt, global_fp_gt, global_fn_gt)
 
     return {
         "mode": "labels-vs-labels",
-        "frames_evaluated": len(frames_matching),
+        "frames_evaluated": len(frames_to_evaluate),
         "per_frame": per_frame,
         "per_class": per_class,
         "mean_iou": mean_iou,
+        "global_metrics": {
+            "tp": int(global_tp),
+            "fp": int(global_fp),
+            "fn": int(global_fn),
+            "precision": global_prec_recall_f1['precision'],
+            "recall": global_prec_recall_f1['recall'],
+            "f1": global_prec_recall_f1['f1'],
+        },
         "frames_evaluated_gt": len(frames_gt),
         "per_frame_gt": per_frame_gt,
         "per_class_gt": per_class_gt,
         "mean_iou_gt": mean_iou_gt,
+        "global_metrics_gt": {
+            "tp": int(global_tp_gt),
+            "fp": int(global_fp_gt),
+            "fn": int(global_fn_gt),
+            "precision": global_prec_recall_f1_gt['precision'],
+            "recall": global_prec_recall_f1_gt['recall'],
+            "f1": global_prec_recall_f1_gt['f1'],
+        },
         "num_classes": num_classes,
     }
-
-def main():
-    """
-    Script standalone per valutazione YOLO su dataset di immagini.
-    Esegue inferenza e calcola IOU contro ground truth per ogni frame e classe.
-    
-    Usage:
-        python evaluation.py --model weights/fine_tuned_yolo_final.pt \\
-                            --images dataset/test/images \\
-                            --labels dataset/test/labels \\
-                            --device 0 \\
-                            --conf-thres 0.25
-    
-    Output:
-        - Print IOU per immagine e per classe su console
-        - Media IOU finale su tutti i frame
-    
-    Esempio Output:
-        frame_00001.jpg PREDICTIONS:
-          class=0 x=0.5123 y=0.4567 w=0.0987 h=0.1234
-        frame_00001.jpg GROUND TRUTH:
-          class=0 x=0.5100 y=0.4550 w=0.1000 h=0.1200
-        frame_00001.jpg: average IOU = 0.892
-        
-        Average IOU per classe (solo frame con GT):
-        Classe 0: 0.876 su 45 box
-        Classe 5: 0.823 su 32 box
-        
-        Mean IOU su 110 frame: 0.854
-    """
-    # Parsing argomenti CLI (usa configurazione centralizzata)
-    args = get_args()
-    config = PipelineConfig.from_args(args)
-    
-    # Carica modello YOLO
-    model = YOLO(config.model)
-    
-    # Lista immagini da valutare
-    images = sorted([p for p in Path(args.images).glob('*') if p.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp'}])
-    
-    # Inizializza accumulatori
-    results = []
-    all_iou_per_class = {c: [] for c in range(13)}
-    
-    # Per ogni immagine
-    for img_path in images:
-        # Carica ground truth
-        label_path = Path(args.labels) / (img_path.stem + '.txt')
-        gt_boxes = load_yolo_labels(label_path)
-        
-        # Inferenza YOLO
-        pred = model.predict(source=str(img_path), device=config.device, verbose=False, imgsz=config.imgsz, conf=config.conf_thres)
-        
-        # Estrai predictions normalizzate
-        pred_boxes = []
-        img = cv2.imread(str(img_path))
-        h, w = img.shape[:2] if img is not None else (1, 1)
-        if pred and hasattr(pred[0], 'boxes') and pred[0].boxes is not None:
-            for box in pred[0].boxes:
-                cls = int(box.cls.item())
-                xywh = box.xywh[0].cpu().numpy()  # in pixel
-                # Normalizza rispetto a dimensione immagine
-                x, y, bw, bh = xywh
-                x /= w; y /= h; bw /= w; bh /= h
-                pred_boxes.append((cls, x, y, bw, bh))
-        
-        # Print predizioni per debug
-        print(f"{img_path.name} PREDICTIONS:")
-        for pb in pred_boxes:
-            print(f"  class={pb[0]} x={pb[1]:.4f} y={pb[2]:.4f} w={pb[3]:.4f} h={pb[4]:.4f}")
-        
-        # Print ground truth per debug
-        print(f"{img_path.name} GROUND TRUTH:")
-        for gb in gt_boxes:
-            print(f"  class={gb[0]} x={gb[1]:.4f} y={gb[2]:.4f} w={gb[3]:.4f} h={gb[4]:.4f}")
-        
-        # ⭐ SKIP frame senza GT (non c'è niente da valutare)
-        if not gt_boxes:
-            print(f"{img_path.name}: SKIPPED (nessuna GT)")
-            continue
-        
-        # Calcola IOU per classe con greedy matching
-        iou_per_class = per_class_iou(gt_boxes, pred_boxes, num_classes=13)
-        
-        # Accumula per statistiche globali
-        for c, ious in iou_per_class.items():
-            all_iou_per_class[c].extend(ious)
-        
-        # Media IOU per questa immagine
-        iou = np.mean([iou for ious in iou_per_class.values() for iou in ious]) if any(iou_per_class.values()) else 0.0
-        results.append((img_path.name, iou))
-        print(f"{img_path.name}: average IOU = {iou:.3f}")
-
-    # Statistica finale per classe
-    print("\nAverage IOU per classe (solo frame con GT):")
-    for c, ious in all_iou_per_class.items():
-        if ious:
-            print(f"Classe {c}: {np.mean(ious):.3f} su {len(ious)} box")
-        else:
-            print(f"Classe {c}: N/A (nessuna GT)")
-    
-    # Statistica finale globale
-    if results:
-        mean_iou = np.mean([r[1] for r in results])
-        print(f"\nMean IOU su {len(results)} frame: {mean_iou:.3f}")
-    else:
-        print("Nessuna immagine trovata.")
-
-
-if __name__ == "__main__":
-    main()
