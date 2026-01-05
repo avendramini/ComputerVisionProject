@@ -2,16 +2,16 @@
 Unified pipeline for multi-camera 3D reconstruction.
 
 Full workflow:
-	1. (Optional) YOLO inference on video to generate 2D detections
+	1. YOLO inference on video to generate 2D detections
 	2. Load labels for each camera (JSON or txt)
-	3. (Optional) 2D tracking to assign track_id between consecutive frames
-	4. (Optional) RAW evaluation against ground truth
-	5. (Optional) Interpolation to fill temporal gaps
-	6. (Optional) INTERP evaluation against ground truth
-	7. (Optional) Optical distortion rectification
+	3. 2D tracking to assign track_id between consecutive frames
+	4. RAW evaluation against ground truth
+	5. Interpolation to fill temporal gaps
+	6. INTERP evaluation against ground truth
+	7. Optical distortion rectification
 	8. Multi-camera 3D triangulation (linear SVD)
 	9. Save results (CSV + JSON)
-	10. (Optional) Interactive 3D visualization
+	10. Interactive 3D visualization
 
 Minimizes disk I/O by operating in memory where possible.
 """
@@ -26,11 +26,13 @@ import numpy as np
 import cv2
 
 # Local modules
-import triangulation_3d as tri
-import metrics_3d
-from interpoler import load_labels_for_camera, interpolate_missing_detections
-from tracking_2d import save_tracks_json, run_video_inference, run_images_inference
-from config import get_args
+import src.triangulation_3d as tri
+import src.metrics_3d as metrics_3d
+from src.interpoler import load_labels_for_camera, interpolate_missing_detections
+from src.tracking_2d import save_tracks_json, run_video_inference, run_images_inference, save_tracked_video_from_images, save_tracked_video_from_video
+from src.evaluation import load_labels_dir_map, frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
+from src.visualizer_3d import visualize_triangulated_points
+from src.config import get_args
 
 
 # Type aliases for common data structures
@@ -451,7 +453,7 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 			
 			# Generate visualization video (without track_id)
 			try:
-				from tracking_2d import save_tracked_video_from_images, save_tracked_video_from_video
+				# from src.tracking_2d import save_tracked_video_from_images, save_tracked_video_from_video
 				out_vid = Path(tracks_out_dir) / f"tracking_out{cam}.mp4"
 				
 				# Case 1: We have an image directory (e.g. dataset/val/images)
@@ -471,12 +473,13 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 			except Exception as e:
 				print(f"[PIPELINE] WARN: Error generating video: {e}")
 		
-		# --- 1c) OPTIONAL: RAW evaluation against GT ---
+		# --- 1c)RAW evaluation against GT ---
 		# Calculate mean IOU between inferred detections and ground truth
 		gt_map = None
 		if evaluate_labels:
 			try:
-				from evaluation import load_labels_dir_map, frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
+				# from src.evaluation import load_labels_dir_map, frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
+				pass
 			except Exception as e:
 				print(f"[PIPELINE] WARN: cannot import evaluation functions: {e}")
 			else:
@@ -485,69 +488,72 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 					# Load GT filtering for this camera
 					gt_map = load_labels_dir_map(gt_dir, camera_id=cam)
 					
-					# If inferring on full videos, we must remap GT keys
-					# GT frame 1 -> Video frame 3 (User observed GT was 1 frame ahead)
-					# GT frame k -> Video frame 3 + (k-1)*5
-					if infer_videos and gt_map:
-						print(f"[PIPELINE] Remapping GT frames for video alignment (offset 3, stride 5)")
-						new_gt_map = {}
-						for k, v in gt_map.items():
-							new_k = 3 + (k - 1) * 5
-							new_gt_map[new_k] = v
-						gt_map = new_gt_map
-					
-					# Convert internal structure to evaluation format
-					raw_map = frames_from_perframe(frames)
-					
-					# Normalize coordinates if necessary (pixel -> [0,1])
-					# Assume if x > 1 they are pixels
-					needs_norm = False
-					for fi in raw_map:
-						if raw_map[fi]:
-							if raw_map[fi][0][1] > 1.0: # check x coordinate
-								needs_norm = True
-							break
-					
-					if needs_norm and vid_w > 0 and vid_h > 0:
+					if not gt_map:
+						print(f"[PIPELINE] No GT labels found for cam {cam} in {gt_dir}. Skipping evaluation.")
+					else:
+						# If inferring on full videos, we must remap GT keys
+						# GT frame 1 -> Video frame 3 (User observed GT was 1 frame ahead)
+						# GT frame k -> Video frame 3 + (k-1)*5
+						if infer_videos and gt_map:
+							print(f"[PIPELINE] Remapping GT frames for video alignment (offset 3, stride 5)")
+							new_gt_map = {}
+							for k, v in gt_map.items():
+								new_k = 3 + (k - 1) * 5
+								new_gt_map[new_k] = v
+							gt_map = new_gt_map
+						
+						# Convert internal structure to evaluation format
+						raw_map = frames_from_perframe(frames)
+						
+						# Normalize coordinates if necessary (pixel -> [0,1])
+						# Assume if x > 1 they are pixels
+						needs_norm = False
 						for fi in raw_map:
-							norm_list = []
-							for item in raw_map[fi]:
-								cls, x, y, bw, bh = item
-								norm_list.append((cls, x/vid_w, y/vid_h, bw/vid_w, bh/vid_h))
-							raw_map[fi] = norm_list
+							if raw_map[fi]:
+								if raw_map[fi][0][1] > 1.0: # check x coordinate
+									needs_norm = True
+								break
+						
+						if needs_norm and vid_w > 0 and vid_h > 0:
+							for fi in raw_map:
+								norm_list = []
+								for item in raw_map[fi]:
+									cls, x, y, bw, bh = item
+									norm_list.append((cls, x/vid_w, y/vid_h, bw/vid_w, bh/vid_h))
+								raw_map[fi] = norm_list
 
-					# Calculate IOU metrics
-					m_raw = compute_iou_metrics_from_predictions(raw_map, gt_map)
-					
-					# Save metrics JSON
-					out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
-					save_eval_json(m_raw, out_dir_eval / f"eval_cam{cam}_raw.json")
-					print(f"[PIPELINE][EVAL] Cam {cam} RAW:")
-					print(f"    Mean IOU (Matching): {m_raw['mean_iou']:.3f} ({m_raw['frames_evaluated']} frames)")
-					print(f"    Mean IOU (GT):       {m_raw['mean_iou_gt']:.3f} ({m_raw['frames_evaluated_gt']} GT frames)")
-					print(f"    Per-class IOU:")
-					print(f"        Class | Matching (IoU, N) | GT (IoU, N)")
-					for cls_id in sorted(m_raw['per_class'].keys()):
-						stats_m = m_raw['per_class'][cls_id]
-						stats_gt = m_raw['per_class_gt'][cls_id]
-						iou_m = f"{stats_m['mean_iou']:.3f}" if stats_m['mean_iou'] is not None else "N/A"
-						n_m = stats_m['count']
-						iou_gt = f"{stats_gt['mean_iou']:.3f}" if stats_gt['mean_iou'] is not None else "N/A"
-						n_gt = stats_gt['count']
-						print(f"        {cls_id:5d} | {iou_m:>8} ({n_m:3d}) | {iou_gt:>8} ({n_gt:3d})")
+						# Calculate IOU metrics
+						m_raw = compute_iou_metrics_from_predictions(raw_map, gt_map)
+						
+						# Save metrics JSON
+						out_dir_eval = Path(eval_out_dir); out_dir_eval.mkdir(parents=True, exist_ok=True)
+						save_eval_json(m_raw, out_dir_eval / f"eval_cam{cam}_raw.json")
+						print(f"[PIPELINE][EVAL] Cam {cam} RAW:")
+						print(f"    Mean IOU (Matching): {m_raw['mean_iou']:.3f} ({m_raw['frames_evaluated']} frames)")
+						print(f"    Mean IOU (GT):       {m_raw['mean_iou_gt']:.3f} ({m_raw['frames_evaluated_gt']} GT frames)")
+						print(f"    Per-class IOU:")
+						print(f"        Class | Matching (IoU, N) | GT (IoU, N)")
+						for cls_id in sorted(m_raw['per_class'].keys()):
+							stats_m = m_raw['per_class'][cls_id]
+							stats_gt = m_raw['per_class_gt'][cls_id]
+							iou_m = f"{stats_m['mean_iou']:.3f}" if stats_m['mean_iou'] is not None else "N/A"
+							n_m = stats_m['count']
+							iou_gt = f"{stats_gt['mean_iou']:.3f}" if stats_gt['mean_iou'] is not None else "N/A"
+							n_gt = stats_gt['count']
+							print(f"        {cls_id:5d} | {iou_m:>8} ({n_m:3d}) | {iou_gt:>8} ({n_gt:3d})")
 				else:
 					print(f"[PIPELINE] WARN: GT not found in {gt_dir}, skip RAW evaluation")
 		
-		# --- 1d) OPTIONAL: Temporal interpolation ---
+		# --- 1d) Temporal interpolation ---
 		# Fills gaps in detections by copying last valid value
 		if do_interpolate:
 			frames = interpolate_missing_detections(frames, max_frame=max(frames.keys()) if frames else -1, max_gap=max_gap)
 			
-			# --- 1e) OPTIONAL: INTERP evaluation against GT ---
+			# --- 1e)INTERP evaluation against GT ---
 			# Recalculate IOU after interpolation to measure impact
 			if evaluate_labels and gt_map:
 				try:
-					from evaluation import frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
+					# from src.evaluation import frames_from_perframe, compute_iou_metrics_from_predictions, save_eval_json
 					
 					inter_map = frames_from_perframe(frames)
 					
@@ -697,7 +703,7 @@ def main():
 	
 	# Interactive 3D visualization (lazy import to avoid matplotlib dependencies in headless run)
 	if args.visualize:
-		from visualizer_3d import visualize_triangulated_points
+		# from src.visualizer_3d import visualize_triangulated_points
 		visualize_triangulated_points()
 
 

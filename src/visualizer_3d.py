@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  
 
 # Reuse calibration loader
-from triangulation_3d import load_calibrations_for_cams
+from .triangulation_3d import load_calibrations_for_cams
 import json
 
 

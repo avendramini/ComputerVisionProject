@@ -46,54 +46,32 @@ pip install -r requirements.txt
 ## Folder Structure
 
 ```
-config.py
 dataset.yaml
-evaluation.py
 fine_tune.py
-interpoler.py
 pipeline.py
 README.md
-rectified_videos.py
 run.sh
-tracking_2d.py
-triangulation_3d.py
-visualizer_3d.py
-yolo11n.pt
-yolo12n.pt
-yolov8n.pt
-yolov8s.pt
-__pycache__/
+src/
+	config.py
+	evaluation.py
+	interpoler.py
+	metrics_3d.py
+	rectified_videos.py
+	tracking_2d.py
+	triangulation_3d.py
+	visualizer_3d.py
+	__init__.py
 camparams/
 	out13_camera_calib.json
 	out13_img_points.json
 	...
 dataset/
-	data.yaml
-	README.dataset.txt
-	boh/
-		images/
-		labels/
-			...
-	infer_video/
-		labels_out13.json
-		...
-	test/
-		images/
-		labels/
-			...
-	train/
-		images/
-		labels/
-			...
 	val/
 		images/
 		labels/
 			...
 	video/
 runs/
-	debug_alignment/
-	detect/
-	eval/
 	tracks/
 	trajectories/
 	triangulation/
@@ -101,15 +79,14 @@ runs/
 		points.json
 weights/
 	best.pt
-	fine_tuned_yolo_final.pt
-	...
 ```
 
+- `src/` : core python modules for the pipeline
 - `dataset/` : images, YOLO labels, videos, split into train/val/test, and subfolders for inference and video
 - `camparams/` : camera calibration files (JSON)
 - `weights/` : pre-trained and fine-tuned YOLO models
 - `runs/` : results for inference, triangulation, evaluation, and more
-- Main scripts: `pipeline.py`, `triangulation_3d.py`, `evaluation.py`, `visualizer_3d.py`, etc.
+- Main scripts: `pipeline.py`, `fine_tune.py`
 
 ## Main Pipeline
 The complete pipeline is managed by `pipeline.py` and can be configured via `run.sh` or command line arguments.
@@ -142,7 +119,7 @@ python pipeline.py --infer-videos --interpolate --rectify --evaluate-labels --vi
 - `--model weights/fine_tuned_yolo_final.pt` : YOLO model to use
 - `--device 0` : GPU/CPU
 
-For all options see `config.py` or run `python pipeline.py --help`.
+For all options see `src/config.py` or run `python pipeline.py --help`.
 
 ## Custom YOLO Training
 To train/fine-tune YOLO on a custom dataset:
@@ -153,20 +130,15 @@ python fine_tune.py
 The trained model will be saved in `weights/`.
 
 ## Evaluation
-To evaluate YOLO model performance on a test dataset:
+To evaluate the pipeline (IoU metrics) against ground truth:
 ```bash
-python evaluation.py --model weights/fine_tuned_yolo_final.pt --images dataset/test/images --labels dataset/test/labels --device 0
+python pipeline.py --labels-dir dataset/infer_video --evaluate-labels --eval-gt-dir dataset/val/labels
 ```
-Output: IoU metrics per image and class, final average.
 
 ## 3D Triangulation and Visualization
-To triangulate 3D points from YOLO labels:
+To triangulate 3D points from YOLO labels and visualize them:
 ```bash
-python triangulation_3d.py
-```
-To visualize 3D points:
-```bash
-python visualizer_3d.py
+python pipeline.py --labels-dir dataset/infer_video --visualize
 ```
 
 ## Dataset
