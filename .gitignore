@@ -54,5 +54,4 @@ venv/
 env/
 ENV/
 *.env
-CVproject/
-action/
+CVReport/

@@ -14,19 +14,34 @@ This project allows you to:
 
 ## Requirements
 - Python 3.8+
-- [Ultralytics YOLOv8](https://docs.ultralytics.com/) (`pip install ultralytics`)
+- [Ultralytics](https://docs.ultralytics.com/) (`pip install ultralytics`)
 - OpenCV, NumPy, Matplotlib, PyYAML, torch
 - Recommended: Conda environment
 
 ## Installation
-1. Clone the repository and move into the project folder.
-2. Install dependencies:
-	```bash
-	conda create -n cv python=3.10
-	conda activate cv
-	pip install -r requirements.txt
-	# or install manually: ultralytics opencv-python numpy matplotlib pyyaml torch
-	```
+
+### Option 1: Conda (Recommended)
+Create the environment directly from the `environment.yml` file. This ensures all dependencies (including system libraries) are correct.
+
+```bash
+conda env create -f environment.yml
+conda activate cv
+```
+
+### Option 2: Pip
+If you prefer using pip or a standard virtual environment:
+
+```bash
+# Create a virtual environment (optional but recommended)
+python -m venv venv
+# Windows
+.\venv\Scripts\activate
+# Linux/Mac
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
 
 ## Folder Structure
 

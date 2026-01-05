@@ -27,6 +27,7 @@ import cv2
 
 # Local modules
 import triangulation_3d as tri
+import metrics_3d
 from interpoler import load_labels_for_camera, interpolate_missing_detections
 from tracking_2d import save_tracks_json, run_video_inference, run_images_inference
 from config import get_args
@@ -252,7 +253,9 @@ def filter_3d_movements(results_per_frame: List[Dict[int, np.ndarray]], idxs: Li
         points.sort(key=lambda x: x[0])
         
         # Tighter thresholds
-        threshold = 1.2 if cls_id == 0 else 0.5
+        # Ball (0): 1.2 m/frame (~30 m/s)
+        # Humans/Others: 0.25 m/frame (~6.25 m/s) - reduced from 0.5 to filter impossible jumps
+        threshold = 1.2 if cls_id == 0 else 0.25
         
         if not points:
             continue
@@ -274,10 +277,10 @@ def filter_3d_movements(results_per_frame: List[Dict[int, np.ndarray]], idxs: Li
             dist = np.linalg.norm(curr_point - last_valid_point)
             max_dist = threshold * dt
             
-            # If temporal gap is huge (e.g. > 2 seconds = 50 frames), 
+            # If temporal gap is huge (e.g. > 6 seconds = 150 frames), 
             # accept new position as "new start" to avoid losing track
             # if player crossed the field while not visible.
-            if dt > 50:
+            if dt > 150:
                 max_dist = float('inf')
 
             if dist <= max_dist:
@@ -664,6 +667,10 @@ def run_pipeline(cameras: List[int], labels_dir: str, do_interpolate: bool, max_
 		frames_by_class=frames_by_class,
 		tracks_by_cam=None,
 	)
+
+	# --- 7) Calculate and print 3D metrics ---
+	print("\n[PIPELINE] Calculating 3D trajectory metrics...")
+	metrics_3d.calculate_metrics(out_dir / "points.json")
 
 	# Note: per-camera evaluation already performed during loop (step 1c and 1e)
 
