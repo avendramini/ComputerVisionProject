@@ -151,6 +151,3 @@ The expected structure is in `dataset/`:
 Developed by [your name/team].
 Based on Ultralytics YOLOv8.
 All code and documentation are provided in English for clarity and collaboration.
-
-## License
-MIT License
